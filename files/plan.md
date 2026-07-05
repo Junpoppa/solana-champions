@@ -2,6 +2,8 @@
 
 Resume = read this + memory.md. Unity = `unity_game/` (Unity 6, URP). Web = `web/` (Vite+TS+Three.js).
 
+> ★★ **STANDING RULE (s29): repo is on GitHub — `github.com/Junpoppa/solana-champions` (PRIVATE).** After ANY session's changes: `git add -A && git commit && git push`. Once Railway is connected, every push auto-deploys the live site. Root `.gitignore` filters Unity Library/junk/media; the WebGL build in `web/public/unity` IS committed on purpose (hosts never run Unity).
+
 ## Architecture = HYBRID (shipping setup)
 - **Gameplay = Unity.** `unity_game/Assets/Scenes/Course.unity` → WebGL build → `web/public/unity/`, embedded. IS the game (movement/camera/obstacle/materials/FX). NEVER hand-port gameplay to Three.js (see memory.md #1).
 - **Front-end = JS (`web/`).** Flow: Identity → Start menu → Lobby → JOIN → Unity game → standings → Lobby.
@@ -62,7 +64,7 @@ FREE Party Characters (bean) · ObstacleCoursePack (controller+hazards) · POLY 
 
 ~~0b/0c/1b/1e dropped by user (s28); 1c+1d DONE s28.~~
 2. **Solana payout + wallet:** identity screen already collects address (`playerProfile.v1`, base58-validated), winner's address shows in standings — NO on-chain transfer yet. Needs funded payer wallet + `@solana/web3.js` server-side + key mgmt + net choice + security review. Later: wallet connect (Phantom), NFT skin from `BeanLook`, on-chain leaderboard.
-3. **Multiplayer remaining:** (a) DEPLOY server (Railway/Fly/Render, `wss://` + `VITE_WS_URL` + `ALLOWED_ORIGIN`); (b) optional private room codes. Queue rules are production-set (s28b). Core is live — see DONE + [[multiplayer-v1]].
+3. **Multiplayer remaining:** (a) DEPLOY = **Railway via GitHub (IN PROGRESS s29)** — repo pushed + README runbook + Dockerfile committed; user connects repo on railway.app → Generate Domain → set `ALLOWED_ORIGIN=<domain>`; NO `VITE_WS_URL` needed (net.ts auto same-origin wss); (b) optional private room codes. Queue rules are production-set (s28b). Core is live — see DONE + [[multiplayer-v1]].
 3b. Platform Race mode — PARKED (user: "no need for now", s28). Seed scene `Scenes/PlatformRace.unity` exists if revived.
 4. More course content (sections/obstacles/checkpoints); tune feel.
 5. Prod hosting: serve `.unityweb` with `Content-Encoding: br` (or rebuild uncompressed).

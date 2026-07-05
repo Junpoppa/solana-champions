@@ -1,0 +1,17 @@
+unity_game/
+_diag/
+.playwright-mcp/
+.ruff_cache/
+web/node_modules/
+web/dist/
+web/shots/
+server/node_modules/
+server/dist/
+files/
+tools/
+.claude/
+*.log
+*.rar
+*.bat
+*.png
+*.jpeg

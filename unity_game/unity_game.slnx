@@ -1,0 +1,15 @@
+﻿<Solution>
+  <Project Path="GameCreator.Runtime.Core.csproj" />
+  <Project Path="GameCreator.Editor.Core.csproj" />
+  <Project Path="LineworkLite.csproj" />
+  <Project Path="Barmetler.RoadSystem.Runtime.csproj" />
+  <Project Path="ithappy.Creative_Characters_FREE.Editor.csproj" />
+  <Project Path="ithappy.Creative_Characters_FREE.csproj" />
+  <Project Path="Assembly-CSharp-Editor.csproj" />
+  <Project Path="GameCreator.Tests.Core.csproj" />
+  <Project Path="Assembly-CSharp.csproj" />
+  <Project Path="Barmetler.RoadSystem.Editor.csproj" />
+  <Project Path="LineworkLite.Editor.csproj" />
+  <Project Path="Barmetler.RoadSystem.Runtime.Tests.csproj" />
+  <Project Path="Barmetler.RoadSystem.Editor.Tests.csproj" />
+</Solution>

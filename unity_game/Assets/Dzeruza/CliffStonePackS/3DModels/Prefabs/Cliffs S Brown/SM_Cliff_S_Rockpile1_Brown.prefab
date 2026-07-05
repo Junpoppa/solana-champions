@@ -1,0 +1,71 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &4934593487073474464
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 2230650439882350826, guid: c7cb407c5404a4d4d989e3e4e460a02e, type: 3}
+      propertyPath: 'm_Materials.Array.data[0]'
+      value: 
+      objectReference: {fileID: 2100000, guid: 56f0e31bcb847cf408f02f775ea13505, type: 2}
+    - target: {fileID: 4239153671701516077, guid: c7cb407c5404a4d4d989e3e4e460a02e, type: 3}
+      propertyPath: 'm_Materials.Array.data[0]'
+      value: 
+      objectReference: {fileID: 2100000, guid: 56f0e31bcb847cf408f02f775ea13505, type: 2}
+    - target: {fileID: 8543127315970373602, guid: c7cb407c5404a4d4d989e3e4e460a02e, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8543127315970373602, guid: c7cb407c5404a4d4d989e3e4e460a02e, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8543127315970373602, guid: c7cb407c5404a4d4d989e3e4e460a02e, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8543127315970373602, guid: c7cb407c5404a4d4d989e3e4e460a02e, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 8543127315970373602, guid: c7cb407c5404a4d4d989e3e4e460a02e, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8543127315970373602, guid: c7cb407c5404a4d4d989e3e4e460a02e, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8543127315970373602, guid: c7cb407c5404a4d4d989e3e4e460a02e, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8543127315970373602, guid: c7cb407c5404a4d4d989e3e4e460a02e, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8543127315970373602, guid: c7cb407c5404a4d4d989e3e4e460a02e, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8543127315970373602, guid: c7cb407c5404a4d4d989e3e4e460a02e, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8941270475632946263, guid: c7cb407c5404a4d4d989e3e4e460a02e, type: 3}
+      propertyPath: 'm_Materials.Array.data[0]'
+      value: 
+      objectReference: {fileID: 2100000, guid: 56f0e31bcb847cf408f02f775ea13505, type: 2}
+    - target: {fileID: 9062537311269023064, guid: c7cb407c5404a4d4d989e3e4e460a02e, type: 3}
+      propertyPath: m_Name
+      value: SM_Cliff_S_Rockpile1_Brown Variant
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: c7cb407c5404a4d4d989e3e4e460a02e, type: 3}

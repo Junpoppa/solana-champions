@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bean Obstacle Course</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; overflow: hidden; background: #261341; }
+      /* canvas sits above the lobby video (z 1) but below the menu/lobby overlays (z 25+) */
+      #app { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; z-index: 10; }
+      #hud {
+        position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 15;
+        font: 700 28px/1 system-ui, sans-serif; color: #fff; display: none;
+        text-shadow: 0 2px 6px rgba(0,0,0,.4); pointer-events: none; user-select: none;
+      }
+      #hint {
+        position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 15;
+        font: 500 14px/1 system-ui, sans-serif; color: #fff; opacity: .8; display: none;
+        text-shadow: 0 1px 3px rgba(0,0,0,.4); pointer-events: none; user-select: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="app"></canvas>
+    <div id="hud">0.00</div>
+    <div id="hint">click to look · WASD / arrows to run · Space to jump · R to respawn</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

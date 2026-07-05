@@ -1,0 +1,49 @@
+# ================= Unity (unity_game/) =================
+unity_game/Library/
+unity_game/Temp/
+unity_game/Logs/
+unity_game/Builds/
+unity_game/UserSettings/
+unity_game/obj/
+unity_game/.vscode/
+unity_game/*.csproj
+unity_game/*.sln
+unity_game/*.slnf
+
+# screenshots / local media dumps inside the Unity project (not used by the game)
+unity_game/Assets/Screenshots/
+unity_game/drive-download-*/
+unity_game/drive-download-*.zip
+unity_game/*.png
+unity_game/*.jpg
+unity_game/*.jpeg
+unity_game/*.mp4
+unity_game/*.wav
+unity_game/*.fbx
+unity_game/*.zip
+
+# oversized archives (FallDudes.rar is 186MB — over GitHub's 100MB hard limit)
+*.rar
+
+# ================= Node (web/ + server/) =================
+node_modules/
+web/dist/
+server/dist/
+*.log
+
+# env files (only .env.example templates are committed)
+.env
+.env.local
+.env.*.local
+
+# ================= Dev/session junk =================
+_diag/
+.playwright-mcp/
+.ruff_cache/
+web/shots/
+.claude/
+.claude.json
+skills-lock.json
+av-bob.jpeg
+bean-check-1.png
+start.png

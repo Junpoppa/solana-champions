@@ -1,7 +1,7 @@
 import { randomUUID, randomInt } from "node:crypto";
 import type { GameMode, RosterEntry, MatchRosterEntry, RoomPhase, MatchResult, ServerMsg, Pose } from "./types.js";
 import type { Player } from "./Player.js";
-import { config, clamp, MODE_RULES, type ModeRules } from "./config.js";
+import { config, clamp, MODE_RULES, fillCountdownMsFor, type ModeRules } from "./config.js";
 import { rank } from "./ranking.js";
 import { log } from "./log.js";
 
@@ -45,8 +45,12 @@ export class Room {
         return;
       }
       // The countdown only arms once minToStart players are queued; before that the
-      // waitlist just shows "waiting for players".
-      if (this.players.length >= this.rules.minToStart && !this.fillTimer) this.armFillTimer();
+      // waitlist just shows "waiting for players". Once armed, every extra player can
+      // SHRINK the remaining time to the table value for the new count (never extend).
+      if (this.players.length >= this.rules.minToStart) {
+        if (!this.fillTimer) this.armFillTimer();
+        else this.maybeShrinkFillTimer();
+      }
       this.broadcastQueue();
     } else {
       if (!this.pending.includes(p)) this.pending.push(p);
@@ -332,10 +336,22 @@ export class Room {
 
   private armFillTimer(): void {
     this.clearFillTimers();
-    this.fillDeadline = Date.now() + this.rules.fillCountdownMs;
-    this.fillTimer = setTimeout(() => this.onFillExpire(), this.rules.fillCountdownMs);
+    const ms = fillCountdownMsFor(this.players.length);
+    this.fillDeadline = Date.now() + ms;
+    this.fillTimer = setTimeout(() => this.onFillExpire(), ms);
     this.tickTimer = setInterval(() => this.broadcastQueue(), 1000);
-    log(`[${this.mode}] countdown armed (${this.players.length} queued, ${this.rules.fillCountdownMs / 1000}s)`);
+    log(`[${this.mode}] countdown armed (${this.players.length} queued, ${ms / 1000}s)`);
+  }
+
+  // A join while armed: pull the deadline in to the table value for the new count if
+  // that is sooner than what's already on the clock. Never pushes the deadline out.
+  private maybeShrinkFillTimer(): void {
+    const target = Date.now() + fillCountdownMsFor(this.players.length);
+    if (target >= this.fillDeadline) return;
+    if (this.fillTimer) clearTimeout(this.fillTimer);
+    this.fillDeadline = target;
+    this.fillTimer = setTimeout(() => this.onFillExpire(), target - Date.now());
+    log(`[${this.mode}] countdown shrunk (${this.players.length} queued, ${Math.round((target - Date.now()) / 1000)}s left)`);
   }
 
   private onFillExpire(): void {

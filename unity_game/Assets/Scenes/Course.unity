@@ -12428,7 +12428,7 @@ MonoBehaviour:
   ragdollAngularDamping: 0.05
   ragdollLinearDamping: 0.02
   camSmoothTime: 0.08
-  courseGetUpSpeed: 1.8
+  courseGetUpSpeed: 3.6
   minLimpTime: 0.6
   restSpeedThreshold: 0.9
   groundProbe: 0.7

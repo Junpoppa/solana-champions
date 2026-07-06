@@ -50,9 +50,9 @@ public class RagdollController : MonoBehaviour
     public float camSmoothTime = 0.08f;
 
     [Header("Standup / recovery")]
-    [Tooltip("Spinner/Course only: recover faster after a beam hit. Halves the limp + bone-reset times and plays " +
+    [Tooltip("Spinner/Course only: recover faster after a beam hit. Quarters the limp + bone-reset times and plays " +
              "the standup clip at this speed multiplier (1 = normal). Other scenes are unaffected.")]
-    public float courseGetUpSpeed = 1.8f;
+    public float courseGetUpSpeed = 3.6f;
     [Tooltip("Minimum seconds the bean stays limp before it's allowed to get up (so it flops first).")]
     public float minLimpTime = 0.6f;
     [Tooltip("Hips must be slower than this (m/s) to count as 'settled'.")]
@@ -162,8 +162,9 @@ public class RagdollController : MonoBehaviour
         cam = Object.FindAnyObjectByType<CameraManager>();
 
         // Spinner/Course: recover faster after a beam hit — shorter limp + bone-reset (clip is sped up in BeginStandClip).
+        // 0.25x (s31: was 0.5x, user wants Spinner get-ups ~2x faster overall — pairs with courseGetUpSpeed 3.6).
         fastGetUp = gameObject.scene.name == "Course";
-        if (fastGetUp) { minLimpTime *= 0.5f; timeToResetBones *= 0.5f; }
+        if (fastGetUp) { minLimpTime *= 0.25f; timeToResetBones *= 0.25f; }
         camProxy = new GameObject("RagdollCamTarget").transform; // standalone (NOT under the bean) so it never feeds back into the bones
 
         hips = transform.Find("BeanModel/Armature/Hips");

@@ -1,21 +1,23 @@
-using System.Collections;
 using System.Runtime.InteropServices;
 using UnityEngine;
 
 /// <summary>
-/// Shared "3 · 2 · 1 · GO!" match-start intro. Unity owns the authoritative timer:
+/// Shared "3 · 2 · 1 · GO!" match-start intro, driven by an ABSOLUTE wall-clock GO instant:
 ///  - freezes the bean (CharacterControls.LockControl) for the whole count,
 ///  - emits each label ("3","2","1","GO","") to the web DOM overlay via the CountdownTick jslib,
 ///  - on GO unfreezes the bean and fires <see cref="OnGo"/>.
-/// Mode controllers (LmsStartController, SpinnerDifficultyRamp) subscribe to OnGo to kick off their logic.
+/// Multiplayer: the server fixes goAtEpochMs (one shared instant for the whole room) and JS hands it
+/// in via WebBridge.BeginCountdown → <see cref="BeginCountdownAt"/>. Every tick and the unfreeze are
+/// re-derived from that instant each Update, so all players hit GO at the same wall-clock moment —
+/// and a tab that was hidden (WebGL pauses the loop) catches up INSTANTLY on resume instead of
+/// replaying a stale 3·2·1 (remaining &lt;= 0 → straight to GO, never a frozen bean).
+/// Mode controllers (LmsStartController, SpinnerDifficultyRamp) subscribe to OnGo as before.
 /// In the editor the jslib is compiled out, so ticks just Debug.Log — the freeze/GO logic still runs.
 /// </summary>
 public class IntroCountdown : MonoBehaviour
 {
     [Tooltip("Count starts from this number down to 1, then shows GO.")]
     public int countFrom = 3;
-    [Tooltip("Seconds each number stays on screen.")]
-    public float stepSeconds = 1f;
     [Tooltip("How long GO! stays up before the overlay clears.")]
     public float goHold = 0.6f;
 
@@ -33,6 +35,14 @@ public class IntroCountdown : MonoBehaviour
 
     private CharacterControls player;
     private bool begun;
+    private bool cleared;
+    private double goAtLocalMs;        // absolute local-clock (JS Date.now) GO instant
+    private double fallbackDeadlineMs; // absolute rescue deadline if beginCountdown never arrives
+    private int lastShownDigit = int.MinValue;
+
+    // Wall clock in epoch ms — on WebGL this is backed by JS Date.now(), i.e. exactly the clock the
+    // web shell measured its server offset against. Keeps running while the tab is hidden.
+    private static double NowMs() => System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     void Start()
     {
@@ -40,8 +50,8 @@ public class IntroCountdown : MonoBehaviour
         player = FindFirstObjectByType<CharacterControls>();
         if (player != null) player.LockControl(true); // freeze until the synchronized GO
 
-        // Multiplayer: wait for the server's synchronized "begin" (all clients loaded) before counting,
-        // so every player's 3·2·1·GO (and the LMS drop) fire together. Single-player/editor: start now.
+        // Multiplayer: wait for the server's shared GO instant so every player's 3·2·1·GO (and the
+        // LMS drop) fire together. Single-player/editor: start now.
         bool waitForServer = WebBridge.Multiplayer;
 #if UNITY_EDITOR
         waitForServer = false;
@@ -49,52 +59,81 @@ public class IntroCountdown : MonoBehaviour
         Debug.Log("[IntroCountdown] Start; multiplayer=" + WebBridge.Multiplayer + " waitForServer=" + waitForServer);
         if (waitForServer)
         {
-            NetReady(); // → JS reports ready; server broadcasts beginCountdown → BeginCountdown()
-            StartCoroutine(BeginFallback());
+            // The begin message may have raced the scene load (hidden tab / slow swap) — WebBridge
+            // caches the GO instant statically, so pick it up here instead of waiting forever.
+            if (WebBridge.PendingGoAtMs > 0.0)
+            {
+                BeginCountdownAt(WebBridge.PendingGoAtMs);
+                return;
+            }
+            NetReady(); // → JS reports ready; server broadcasts beginCountdown → BeginCountdownAt()
+            // Safety net: if the synchronized begin never arrives, start locally so the match can NEVER
+            // hard-freeze. 15 s > the server's 12 s begin-timeout, so this only fires on genuine failure.
+            // Absolute-time based: a hidden tab can't fire it early (Update doesn't run while hidden),
+            // and on resume the real begin — if it arrived meanwhile — wins via `begun`.
+            fallbackDeadlineMs = NowMs() + 15000.0;
         }
         else BeginCountdown();
     }
 
-    // Safety net: if the server's synchronized "begin" never arrives (any handshake link failed), start
-    // the countdown locally so the match can NEVER hard-freeze. 15 s > the server's 12 s begin-timeout,
-    // so this only fires on a genuine failure — not while waiting for a slow-loading peer.
-    private IEnumerator BeginFallback()
-    {
-        yield return new WaitForSeconds(15f);
-        if (!begun)
-        {
-            Debug.LogWarning("[IntroCountdown] begin signal never arrived — starting locally (fallback)");
-            BeginCountdown();
-        }
-    }
-
-    // Started by WebBridge.BeginCountdown() on the server's go-ahead (or directly in single-player/editor).
-    public void BeginCountdown()
+    /// <summary>Start the countdown toward an absolute local-clock GO instant (epoch ms).</summary>
+    public void BeginCountdownAt(double goAtMs)
     {
         if (begun) return;
         begun = true;
-        Debug.Log("[IntroCountdown] BeginCountdown → running 3·2·1");
-        StartCoroutine(Run());
+        goAtLocalMs = goAtMs;
+        double remaining = goAtLocalMs - NowMs();
+        Debug.Log("[IntroCountdown] BeginCountdownAt goAt=" + goAtMs.ToString("F0") + " remaining=" + remaining.ToString("F0") + "ms");
+        if (remaining < 0.0) Debug.LogWarning("[IntroCountdown] GO instant already passed — instant GO (late/hidden client catch-up)");
     }
 
-    IEnumerator Run()
+    // Local start (single-player/editor, legacy payload, or fallback): full count from now.
+    public void BeginCountdown()
     {
-        // one frame so mode controllers can park the bean / position things before the first tick
-        yield return null;
+        BeginCountdownAt(NowMs() + countFrom * 1000.0 + 100.0);
+    }
 
-        for (int n = countFrom; n >= 1; n--)
+    void Update()
+    {
+        if (!begun)
         {
-            CountdownTick(n.ToString());
-            yield return new WaitForSeconds(stepSeconds);
+            if (fallbackDeadlineMs > 0.0 && NowMs() > fallbackDeadlineMs)
+            {
+                Debug.LogWarning("[IntroCountdown] begin signal never arrived — starting locally (fallback)");
+                BeginCountdown();
+            }
+            return;
         }
 
-        CountdownTick("GO");
-        if (player != null) player.LockControl(false);
-        MatchClock.StartNow(); // survival timing starts at GO
-        HasFired = true;
-        OnGo?.Invoke();
+        double remaining = goAtLocalMs - NowMs();
 
-        if (goHold > 0f) yield return new WaitForSeconds(goHold);
-        CountdownTick(""); // clear the overlay
+        if (!HasFired)
+        {
+            if (remaining > 0.0)
+            {
+                // Edge-triggered digits: each fires exactly once, derived from absolute time so every
+                // client shows the same digit at the same wall-clock moment.
+                int digit = Mathf.Min(countFrom, (int)System.Math.Ceiling(remaining / 1000.0));
+                if (digit != lastShownDigit)
+                {
+                    lastShownDigit = digit;
+                    CountdownTick(digit.ToString());
+                }
+            }
+            else
+            {
+                CountdownTick("GO");
+                if (player != null) player.LockControl(false);
+                MatchClock.StartNow(); // survival timing starts at GO
+                HasFired = true;
+                OnGo?.Invoke();
+            }
+        }
+        else if (!cleared && remaining <= -goHold * 1000.0)
+        {
+            cleared = true;
+            CountdownTick(""); // clear the overlay
+            enabled = false;   // done — no more work for this component
+        }
     }
 }

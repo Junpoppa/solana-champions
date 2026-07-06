@@ -142,6 +142,7 @@ async function main() {
   let currentMode: GameMode = "spinner";
   let matchCtx: MatchCtx | null = null;
   let standingsShown = false; // guards the finish/standings ordering race
+  let matchRoster: { id: string; nick: string }[] = []; // current match roster (shrinks on playersDropped)
 
   net.setHandlers({
     onIdentified: (id) => { myId = id; },
@@ -156,12 +157,36 @@ async function main() {
       waitlist.hide();
       setState("unity", m.mode);
       // In-game player list (count + names, local player highlighted). setState launches Unity + mounts the HUD.
-      setPlayerHudRoster(m.roster.map((r) => ({ id: r.id, nick: r.nick })), myId);
+      matchRoster = m.roster.map((r) => ({ id: r.id, nick: r.nick }));
+      setPlayerHudRoster(matchRoster, myId);
     },
     // Live avatars: forward each server snapshot straight to Unity.
     onSnapshot: (raw) => { unityGame.pushSnapshot(raw); },
-    // Synchronized start: server says everyone loaded → run the countdown now.
-    onBeginCountdown: () => { unityGame.beginCountdown(); },
+    // Synchronized start: the server fixed an absolute GO instant — every client unfreezes at it.
+    onBeginCountdown: (goAtEpochMs) => { unityGame.beginCountdown(goAtEpochMs); },
+    // Some players never loaded and were dropped from the match: despawn their avatars + shrink the HUD.
+    onPlayersDropped: (m) => {
+      matchRoster = matchRoster.filter((r) => !m.ids.includes(r.id));
+      setPlayerHudRoster(matchRoster, myId);
+      unityGame.pushPlayersDropped(JSON.stringify({ ids: m.ids }));
+    },
+    // WE missed the start (tab hidden during load): server dropped + re-queued us. Leave the game
+    // shell and show the waitlist for the next match.
+    onMatchMissed: (m) => {
+      currentMode = m.mode;
+      unityGame.hide();
+      setState("lobby");
+      waitlist.show(m.mode);
+      waitlist.setNotice("Missed the match start — you're in line for the next one");
+    },
+    // Match cancelled (<2 players ready) — we're back at the front of the queue.
+    onMatchAborted: (m) => {
+      currentMode = m.mode;
+      unityGame.hide();
+      setState("lobby");
+      waitlist.show(m.mode);
+      waitlist.setNotice("Not enough players were ready — waiting for more");
+    },
     // Lobby chat line from the server (already scoped to lobby players) → render it.
     onChatMsg: (m) => { lobby.addChat(m.nick, m.text, m.id === myId); },
     // Standings always win: the server may end the match (grace/timeout) before our local bean falls,
@@ -174,6 +199,14 @@ async function main() {
     },
   });
   net.connect();
+
+  // Tab restored while in a match: put keyboard focus back on the Unity canvas so input works
+  // immediately (the game state itself is message-driven and already reconciled while hidden).
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && appState === "unity") {
+      document.getElementById("unity-canvas")?.focus();
+    }
+  });
 
   // JOIN a mode → enter its server-side waitlist (Unity launches only on matchStart).
   function enterQueue(mode: GameMode) {

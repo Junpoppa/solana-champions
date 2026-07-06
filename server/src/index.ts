@@ -190,7 +190,7 @@ function handle(player: Player, msg: ClientMsg): void {
     case "reportResult": {
       if (!isGameMode(msg.mode)) break;
       rm.reportResult(player, msg.mode, {
-        survivalMs: clamp(Number(msg.survivalMs) || 0, 0, config.MATCH_MAX_MS),
+        survivalMs: clamp(Number(msg.survivalMs) || 0, 0, config.MATCH_WATCHDOG_MS),
         finished: !!msg.finished,
         reason: "died",
       });
@@ -203,6 +203,11 @@ function handle(player: Player, msg: ClientMsg): void {
     }
     case "ready": {
       rm.markReady(player);
+      break;
+    }
+    case "timeSync": {
+      // Clock-sync probe: reply immediately with the server clock (works pre-identify).
+      player.send({ t: "timeSyncPong", t0: Number(msg.t0) || 0, serverNow: Date.now() });
       break;
     }
     case "chat": {

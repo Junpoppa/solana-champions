@@ -43,16 +43,24 @@ export type ClientMsg =
   | { t: "reportResult"; mode: GameMode; survivalMs: number; finished: boolean; reason?: string }
   | { t: "state"; q: Pose }
   | { t: "ready" }
-  | { t: "chat"; text: string };
+  | { t: "chat"; text: string }
+  | { t: "timeSync"; t0: number }; // clock-sync probe; t0 = client Date.now() at send
 
 // ---- Server -> Client ----
 export interface IdentifiedMsg { t: "identified"; id: string; nick: string }
 export interface QueueUpdateMsg { t: "queueUpdate"; mode: GameMode; count: number; capacity: number; minToStart: number; msRemaining: number; roster: RosterEntry[] }
 export interface MatchStartMsg { t: "matchStart"; mode: GameMode; matchId: string; seed: number; startAtEpochMs: number; roster: MatchRosterEntry[] }
 export interface SnapshotMsg { t: "snapshot"; players: { id: string; q: Pose }[] }
-export interface BeginCountdownMsg { t: "beginCountdown" }
+export interface BeginCountdownMsg { t: "beginCountdown"; goAtEpochMs: number } // GO fires at this SERVER-clock instant
+export interface TimeSyncPongMsg { t: "timeSyncPong"; t0: number; serverNow: number }
+export interface PlayersDroppedMsg { t: "playersDropped"; mode: GameMode; ids: string[] } // missed the start; despawn their avatars
+export interface MatchMissedMsg { t: "matchMissed"; mode: GameMode; requeued: boolean } // we missed the start; re-queued for next match
+export interface MatchAbortedMsg { t: "matchAborted"; mode: GameMode } // <2 ready players — match cancelled
 export interface ChatMsg { t: "chatMsg"; id: string; nick: string; text: string; ts: number }
 export interface StandingsMsg { t: "standings"; mode: GameMode; matchId: string; ranked: StandingRow[]; winner: WinnerInfo | null }
 export interface ErrorMsg { t: "error"; code: string; message: string }
 
-export type ServerMsg = IdentifiedMsg | QueueUpdateMsg | MatchStartMsg | SnapshotMsg | BeginCountdownMsg | ChatMsg | StandingsMsg | ErrorMsg;
+export type ServerMsg =
+  | IdentifiedMsg | QueueUpdateMsg | MatchStartMsg | SnapshotMsg | BeginCountdownMsg
+  | TimeSyncPongMsg | PlayersDroppedMsg | MatchMissedMsg | MatchAbortedMsg
+  | ChatMsg | StandingsMsg | ErrorMsg;

@@ -30,6 +30,7 @@ public class NetBridge : MonoBehaviour
     [System.Serializable] private class PoseQ { public float x, y, z, r, s, a, d, j, fx, fy, fz; }
     [System.Serializable] private class SnapPlayer { public string id; public PoseQ q; }
     [System.Serializable] private class Snapshot { public SnapPlayer[] players; }
+    [System.Serializable] private class DroppedIds { public string[] ids; }
 
     private static MatchInfo s_info = null;
 
@@ -93,6 +94,33 @@ public class NetBridge : MonoBehaviour
     {
         try { s_info = JsonUtility.FromJson<MatchInfo>(json); }
         catch (System.Exception e) { Debug.LogWarning("[NetBridge] bad MatchInfo: " + e.Message); }
+    }
+
+    // Players who never loaded were dropped from the match by the server at begin time: remove their
+    // remote avatars + roster entries (and their LMS start hex) so no frozen ghost stands at a spawn.
+    public void OnPlayersDropped(string json)
+    {
+        DroppedIds d;
+        try { d = JsonUtility.FromJson<DroppedIds>(json); }
+        catch (System.Exception e) { Debug.LogWarning("[NetBridge] bad PlayersDropped: " + e.Message); return; }
+        if (d == null || d.ids == null || s_info == null || s_info.roster == null) return;
+
+        var lms = FindFirstObjectByType<LmsStartController>();
+        var keep = new List<RosterEntry>(s_info.roster.Length);
+        foreach (var e in s_info.roster)
+        {
+            bool dropped = System.Array.IndexOf(d.ids, e.id) >= 0;
+            if (!dropped) { keep.Add(e); continue; }
+            Debug.Log("[NetBridge] dropped player " + (e.nick ?? e.id) + " (spawnIndex " + e.spawnIndex + ")");
+            if (remotes.TryGetValue(e.id, out var r))
+            {
+                if (r.root != null) Destroy(r.root.gameObject);
+                remotes.Remove(e.id);
+            }
+            // If remotes aren't spawned yet, shrinking the roster is enough — TrySpawnRemotes never creates them.
+            if (lms != null) lms.RemoveRemoteHex(e.spawnIndex);
+        }
+        s_info.roster = keep.ToArray();
     }
 
     public void OnSnapshot(string json)

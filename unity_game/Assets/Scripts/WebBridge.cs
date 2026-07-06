@@ -33,6 +33,12 @@ public class WebBridge : MonoBehaviour
     public static string Mode => s_mode;
     public static string MatchId => s_matchId;
 
+    // Absolute local-clock GO instant (epoch ms) from the server's beginCountdown. Cached statically
+    // in case the message races the gameplay-scene load — IntroCountdown.Start() picks it up.
+    // 0 = none pending; reset by SetMatchConfig so a stale instant never leaks into the next match.
+    private static double s_pendingGoAtMs = 0.0;
+    public static double PendingGoAtMs => s_pendingGoAtMs;
+
     // ---- bean look ----
     [System.Serializable]
     private class BeanLookData
@@ -155,18 +161,27 @@ public class WebBridge : MonoBehaviour
                 s_seed = d.seed;
                 s_mode = d.mode;
                 s_matchId = d.matchId;
+                s_pendingGoAtMs = 0.0; // new match — clear any stale GO instant
             }
         }
         catch (System.Exception e) { Debug.LogWarning("[WebBridge] bad MatchConfig json: " + e.Message); }
     }
 
-    // Synchronized start: JS calls this (with a dummy arg) when the server says all players loaded.
-    // Kicks off the (frozen, waiting) IntroCountdown so every client's 3·2·1·GO fires together.
-    public void BeginCountdown(string _)
+    // Synchronized start: JS passes the absolute LOCAL-clock GO instant (epoch ms, already
+    // server-offset-corrected). Cached statically (scene-load race) + forwarded to IntroCountdown,
+    // which derives every tick and the unfreeze from it. A non-numeric payload (legacy "go") falls
+    // back to the old start-a-full-count-now behavior.
+    public void BeginCountdown(string payload)
     {
+        double goAt = 0.0;
+        bool parsed = double.TryParse(payload, System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out goAt) && goAt > 1e12; // plausible epoch ms
+        if (parsed) s_pendingGoAtMs = goAt;
         var ic = FindFirstObjectByType<IntroCountdown>();
-        Debug.Log("[WebBridge] BeginCountdown received; IntroCountdown " + (ic != null ? "found" : "NULL"));
-        if (ic != null) ic.BeginCountdown();
+        Debug.Log("[WebBridge] BeginCountdown received (goAt=" + (parsed ? goAt.ToString("F0") : "legacy") + "); IntroCountdown " + (ic != null ? "found" : "NULL"));
+        if (ic == null) return;
+        if (parsed) ic.BeginCountdownAt(goAt);
+        else ic.BeginCountdown();
     }
 
     void Start()

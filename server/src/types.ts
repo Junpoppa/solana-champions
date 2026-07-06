@@ -34,7 +34,7 @@ export interface Pose {
   fz: number; // fling velocity z
 }
 
-export type ResultReason = "died" | "finished" | "timeout" | "disconnect";
+export type ResultReason = "died" | "finished" | "timeout" | "disconnect" | "winner";
 
 export interface MatchResult {
   survivalMs: number;
@@ -54,7 +54,8 @@ export type ClientMsg =
   | { t: "reportResult"; mode: GameMode; survivalMs: number; finished: boolean; reason?: string }
   | { t: "state"; q: Pose } // live pose while in a match
   | { t: "ready" } // gameplay scene loaded; waiting for the synchronized countdown start
-  | { t: "chat"; text: string }; // lobby text chat (broadcast to other lobby players)
+  | { t: "chat"; text: string } // lobby text chat (broadcast to other lobby players)
+  | { t: "timeSync"; t0: number }; // clock-sync probe; t0 = client Date.now() at send
 
 // ---- Server -> Client ----
 export interface StandingRow {
@@ -75,7 +76,11 @@ export type ServerMsg =
   | { t: "identified"; id: string; nick: string }
   | { t: "queueUpdate"; mode: GameMode; count: number; capacity: number; minToStart: number; msRemaining: number; roster: RosterEntry[] }
   | { t: "matchStart"; mode: GameMode; matchId: string; seed: number; startAtEpochMs: number; roster: MatchRosterEntry[] }
-  | { t: "beginCountdown" } // all players loaded (or timeout) → start the 3·2·1 now, together
+  | { t: "beginCountdown"; goAtEpochMs: number } // GO fires at this SERVER-clock instant on every client
+  | { t: "timeSyncPong"; t0: number; serverNow: number } // reply to timeSync (echoes t0 for RTT)
+  | { t: "playersDropped"; mode: GameMode; ids: string[] } // these players missed the start; despawn their avatars
+  | { t: "matchMissed"; mode: GameMode; requeued: boolean } // you missed the start; you're re-queued for the next match
+  | { t: "matchAborted"; mode: GameMode } // <2 players were ready — match cancelled, back to the queue
   | { t: "chatMsg"; id: string; nick: string; text: string; ts: number } // a lobby chat line (server-stamped nick/id)
   | { t: "snapshot"; players: { id: string; q: Pose }[] } // ~15 Hz live poses of all players in the match
   | { t: "standings"; mode: GameMode; matchId: string; ranked: StandingRow[]; winner: WinnerInfo | null }

@@ -34,6 +34,9 @@ let onBackFn: (() => void) | null = null;
 const MIN_HOWTO_MS = 7000;
 let howToShownAt = 0;
 let readyTimer: number | null = null;
+// Launch-session token: bumped on every launch()/hide(). A launch continuation that awaits the
+// (slow) build download must not re-show the canvas if the match was missed/torn down meanwhile.
+let session = 0;
 
 function injectStyles() {
   if (document.getElementById("unityStyles")) return;
@@ -156,7 +159,9 @@ export const unityGame = {
     // Hold the ready until the how-to card has been visible ≥ MIN_HOWTO_MS so players always get a
     // moment to read it (server starts 3·2·1 only once EVERY player reported ready).
     (window as any).__unityReady = () => {
-      const wait = Math.max(0, MIN_HOWTO_MS - (Date.now() - howToShownAt));
+      // Hidden tab: skip the how-to dwell entirely — nobody is reading it, background timers are
+      // throttled, and a late ready gets this player DROPPED from the match by the server.
+      const wait = document.hidden ? 0 : Math.max(0, MIN_HOWTO_MS - (Date.now() - howToShownAt));
       if (readyTimer != null) clearTimeout(readyTimer);
       readyTimer = window.setTimeout(() => { readyTimer = null; net.sendReady(); }, wait);
     };
@@ -170,7 +175,9 @@ export const unityGame = {
     // Music starts on the FIRST countdown tick ("3"), in sync across all players — not on the load screen.
     initCountdown(() => { musicController.startGame(mode); hideHowTo(); });
     initPlayerHud(); // in-game player list; roster/presence pushed from main.ts
+    const mySession = ++session;
     await ensureLoaded();
+    if (mySession !== session) return; // match missed/torn down while the build was downloading
     container?.classList.add("show");
     document.getElementById("unity-canvas")?.focus();
     // Boot scene is loaded first; switch to the gameplay scene for this mode.
@@ -225,13 +232,21 @@ export const unityGame = {
   pushSnapshot(raw: string) {
     instance?.SendMessage("NetBridge", "OnSnapshot", raw);
   },
-  // Synchronized start: the server says everyone's loaded → tell Unity to run the 3·2·1 now.
-  // Pass a dummy arg — Unity WebGL's parameterless SendMessage is a less-reliable path.
-  beginCountdown() {
-    console.log("[net] beginCountdown → Unity");
-    instance?.SendMessage("WebBridge", "BeginCountdown", "go");
+  // Synchronized start: the server fixed an absolute GO instant (server clock). Convert it to the
+  // local clock and hand it to Unity — IntroCountdown derives every tick + the unfreeze from it, so
+  // all players hit GO at the same wall-clock moment regardless of message latency or a hidden tab.
+  beginCountdown(goAtEpochMs: number) {
+    const goAtLocal = Math.round(net.serverEpochToLocal(goAtEpochMs));
+    console.log("[net] beginCountdown → Unity, goAtLocal", goAtLocal, "in", goAtLocal - Date.now(), "ms");
+    instance?.SendMessage("WebBridge", "BeginCountdown", String(goAtLocal));
+  },
+  // A player missed the start and was dropped by the server: remove their remote avatar
+  // (and LMS start hex) from our running match.
+  pushPlayersDropped(idsJson: string) {
+    instance?.SendMessage("NetBridge", "OnPlayersDropped", idsJson);
   },
   hide() {
+    session++; // invalidate any launch() continuation still awaiting the build
     container?.classList.remove("show");
     // Give the OS cursor back for the DOM lobby/standings (Unity's Boot swap also unlocks C#-side).
     if (document.pointerLockElement) document.exitPointerLock();

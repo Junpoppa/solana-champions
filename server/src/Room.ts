@@ -18,6 +18,7 @@ export class Room {
   matchId = "";
   seed = 0;
   startAtEpochMs = 0;
+  private goAtEpochMs = 0; // server-clock GO instant, set at fireBegin (0 until then)
 
   private fillDeadline = 0;
   private fillTimer: NodeJS.Timeout | null = null;
@@ -75,13 +76,17 @@ export class Room {
     if (i >= 0 && (this.phase === "running" || this.phase === "starting")) {
       p.connected = false;
       if (!p.result) {
-        const elapsed = clamp(Date.now() - this.startAtEpochMs, 0, config.MATCH_MAX_MS);
-        p.result = { survivalMs: elapsed, finished: false, reason: "disconnect", reportedAt: Date.now() };
+        p.result = { survivalMs: this.elapsedSinceGo(), finished: false, reason: "disconnect", reportedAt: Date.now() };
       }
       this.maybeEnd();
       return;
     }
     this.leave(p);
+  }
+
+  // Match time elapsed since GO (falls back to the matchStart reference before GO fires).
+  private elapsedSinceGo(): number {
+    return Math.max(0, Date.now() - (this.goAtEpochMs || this.startAtEpochMs));
   }
 
   // Live pose from a client while in a match — stored, fanned out on the snapshot tick.
@@ -104,9 +109,66 @@ export class Room {
     if (this.beginFired) return;
     this.beginFired = true;
     if (this.beginTimer) { clearTimeout(this.beginTimer); this.beginTimer = null; }
-    const msg: ServerMsg = { t: "beginCountdown" };
+
+    // Drop players who never got ready (tab hidden / stalled load) instead of starting
+    // them as frozen ghosts. Connected ones are auto-requeued for the next match.
+    // Surviving spawnIndex values are NOT reindexed — clients already placed by them.
+    const dropped = this.players.filter((p) => !this.readyIds.has(p.id));
+    if (dropped.length > 0) {
+      this.players = this.players.filter((p) => this.readyIds.has(p.id));
+      for (const p of dropped) {
+        p.matchId = null;
+        p.result = null;
+        p.pose = null;
+        if (p.connected) {
+          this.pending.push(p);
+          p.send({ t: "matchMissed", mode: this.mode, requeued: true });
+          this.sendPendingUpdate(p);
+        } else {
+          p.roomMode = null;
+        }
+      }
+      log(`[${this.mode}] match ${this.matchId} dropped ${dropped.length} not-ready player(s)`);
+    }
+
+    // Below 2 ready players a match is pointless (solo = guaranteed win, exploitable once
+    // payouts exist) — abort and refill instead.
+    if (this.players.length < 2) {
+      this.abortMatch();
+      return;
+    }
+
+    if (dropped.length > 0) {
+      const droppedMsg: ServerMsg = { t: "playersDropped", mode: this.mode, ids: dropped.map((p) => p.id) };
+      for (const p of this.players) if (p.connected) p.send(droppedMsg);
+    }
+
+    this.goAtEpochMs = Date.now() + config.GO_LEAD_MS;
+    const msg: ServerMsg = { t: "beginCountdown", goAtEpochMs: this.goAtEpochMs };
     for (const p of this.players) if (p.connected) p.send(msg);
-    log(`[${this.mode}] match ${this.matchId} BEGIN (${this.readyIds.size}/${this.players.length} ready)`);
+    log(`[${this.mode}] match ${this.matchId} BEGIN (${this.players.length} ready) goAt=${this.goAtEpochMs}`);
+  }
+
+  // Not enough ready players at begin time: cancel the match, put the remainder at the
+  // front of the queue, and refill.
+  private abortMatch(): void {
+    log(`[${this.mode}] match ${this.matchId} ABORTED (${this.players.length} ready)`);
+    this.clearMatchTimers();
+    const remainder = this.players;
+    this.players = [];
+    this.phase = "filling";
+    for (const p of remainder.reverse()) {
+      p.matchId = null;
+      p.result = null;
+      p.pose = null;
+      if (p.connected) {
+        this.pending.unshift(p);
+        p.send({ t: "matchAborted", mode: this.mode });
+      } else {
+        p.roomMode = null;
+      }
+    }
+    this.promotePending();
   }
 
   reportResult(p: Player, result: MatchResult): void {
@@ -114,7 +176,8 @@ export class Room {
     if (!this.players.includes(p)) return;
     if (p.result) return; // duplicate
     p.result = {
-      survivalMs: clamp(result.survivalMs, 0, config.MATCH_MAX_MS),
+      // Anti-inflation: a report can never claim more time than has actually elapsed.
+      survivalMs: clamp(result.survivalMs, 0, this.elapsedSinceGo()),
       finished: !!result.finished,
       reason: result.reason ?? "died",
       reportedAt: Date.now(),
@@ -160,7 +223,9 @@ export class Room {
     this.readyIds.clear();
     this.beginFired = false;
     this.beginTimer = setTimeout(() => this.fireBegin(), config.BEGIN_TIMEOUT_MS);
-    this.matchTimer = setTimeout(() => this.endMatch(), config.START_DELAY_MS + config.MATCH_MAX_MS);
+    // No gameplay time limit — matches end when one player remains. This is only the
+    // zombie-room watchdog (invisible in normal play).
+    this.matchTimer = setTimeout(() => this.endMatch(), config.START_DELAY_MS + config.MATCH_WATCHDOG_MS);
     this.snapTimer = setInterval(() => this.broadcastSnapshot(), config.SNAPSHOT_MS);
     log(`[${this.mode}] match ${this.matchId} START; ${this.players.length} players seed=${this.seed}`);
   }
@@ -176,22 +241,36 @@ export class Room {
       this.endMatch();
       return;
     }
-    // All but one in: give the last straggler a short grace window.
+    // One player left standing: they're the winner. The short grace only catches a
+    // near-simultaneous death report that's still in flight.
     if (reported >= total - 1 && total > 1 && !this.graceTimer) {
-      this.graceTimer = setTimeout(() => this.endMatch(), config.RESULT_GRACE_MS);
+      this.graceTimer = setTimeout(() => {
+        const survivor = this.players.find((p) => !p.result);
+        this.endMatch(survivor);
+      }, config.RESULT_GRACE_MS);
     }
   }
 
-  private endMatch(): void {
+  private endMatch(survivor?: Player): void {
     if (this.phase !== "running") return;
     this.phase = "finished";
     this.clearMatchTimers();
 
     const now = Date.now();
+    if (survivor && !survivor.result) {
+      // Last player standing: synthesized survival is strictly above every reported time
+      // (reports are clamped to elapsedSinceGo at report time), so ranking puts them 1st.
+      survivor.result = {
+        survivalMs: this.elapsedSinceGo() + 1,
+        finished: false,
+        reason: "winner",
+        reportedAt: now,
+      };
+    }
     for (const p of this.players) {
       if (!p.result) {
         p.result = {
-          survivalMs: clamp(now - this.startAtEpochMs, 0, config.MATCH_MAX_MS),
+          survivalMs: this.elapsedSinceGo(),
           finished: false,
           reason: "timeout",
           reportedAt: now,
@@ -226,17 +305,21 @@ export class Room {
     }
     this.players = [];
     this.phase = "filling";
+    this.goAtEpochMs = 0;
+    this.promotePending();
+  }
 
-    if (this.pending.length) {
-      this.players = this.pending.splice(0, this.rules.capacity);
-      for (const p of this.pending) this.sendPendingUpdate(p);
-      if (this.players.length >= this.rules.capacity) {
-        this.startMatch();
-        return;
-      }
-      if (this.players.length >= this.rules.minToStart) this.armFillTimer();
-      this.broadcastQueue();
+  // Promote pending players into the (empty) forming batch. Shared by reset() and abortMatch().
+  private promotePending(): void {
+    if (!this.pending.length) return;
+    this.players = this.pending.splice(0, this.rules.capacity);
+    for (const p of this.pending) this.sendPendingUpdate(p);
+    if (this.players.length >= this.rules.capacity) {
+      this.startMatch();
+      return;
     }
+    if (this.players.length >= this.rules.minToStart) this.armFillTimer();
+    this.broadcastQueue();
   }
 
   // ---- timers ----------------------------------------------------------------

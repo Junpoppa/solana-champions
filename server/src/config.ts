@@ -7,8 +7,11 @@ function num(name: string, def: number): number {
 export const config = {
   PORT: num("PORT", 8787),
   START_DELAY_MS: num("START_DELAY_MS", 3_500),
-  RESULT_GRACE_MS: num("RESULT_GRACE_MS", 8_000),
-  MATCH_MAX_MS: num("MATCH_MAX_MS", 180_000),
+  RESULT_GRACE_MS: num("RESULT_GRACE_MS", 2_000), // last straggler window once all-but-one reported (catches an in-flight death report)
+  // No visible in-game time limit — matches end when one player remains. The watchdog only
+  // force-ends zombie rooms (e.g. every survivor AFK forever) so the mode's queue can't stall.
+  MATCH_WATCHDOG_MS: num("MATCH_WATCHDOG_MS", 1_800_000),
+  GO_LEAD_MS: num("GO_LEAD_MS", 3_800), // beginCountdown → GO lead: 3s of digits + latency headroom
   SNAPSHOT_MS: num("SNAPSHOT_MS", 66), // ~15 Hz avatar pose fan-out
   BEGIN_TIMEOUT_MS: num("BEGIN_TIMEOUT_MS", 12_000), // max wait for all clients to load before starting the countdown
   ALLOWED_ORIGIN: process.env.ALLOWED_ORIGIN || "", // empty = allow any (dev)

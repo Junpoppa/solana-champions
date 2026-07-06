@@ -108,6 +108,12 @@ export class Waitlist {
     }
   }
 
+  // One-line status override (e.g. "Missed the match start — you're in line for the next one").
+  // The next queueUpdate from the server repaints the timer line, which is the desired behavior.
+  setNotice(text: string) {
+    this.timerEl.textContent = text;
+  }
+
   hide() {
     this.root.classList.remove("show");
   }

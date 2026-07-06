@@ -11,6 +11,9 @@ import type {
   StandingsMsg,
   ChatMsg,
   ErrorMsg,
+  PlayersDroppedMsg,
+  MatchMissedMsg,
+  MatchAbortedMsg,
 } from "./netTypes";
 
 // WS address resolution:
@@ -28,7 +31,10 @@ interface Handlers {
   onQueueUpdate?: (m: QueueUpdateMsg) => void;
   onMatchStart?: (m: MatchStartMsg) => void;
   onSnapshot?: (raw: string) => void; // high-freq avatar poses; raw JSON forwarded to Unity
-  onBeginCountdown?: () => void; // synchronized countdown start for all players
+  onBeginCountdown?: (goAtEpochMs: number) => void; // GO fires at this server-clock instant, same for all players
+  onPlayersDropped?: (m: PlayersDroppedMsg) => void; // players who missed the start — despawn their avatars
+  onMatchMissed?: (m: MatchMissedMsg) => void; // we missed the start; server re-queued us
+  onMatchAborted?: (m: MatchAbortedMsg) => void; // match cancelled (<2 ready) — back to the queue
   onChatMsg?: (m: ChatMsg) => void; // a lobby chat line from another player
   onStandings?: (m: StandingsMsg) => void;
   onError?: (m: ErrorMsg) => void;
@@ -44,6 +50,36 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 // cached identity + intent, replayed on (re)connect
 let profile: { nick: string; solAddress: string | null; look: string | null } | null = null;
 let queuedMode: GameMode | null = null;
+
+// ---- clock sync (offset = serverClock - clientClock) ----------------------------
+// Measured NTP-style: 5 probes, keep the lowest-RTT sample (most symmetric path).
+// Used to convert the server's goAtEpochMs into local time for the synced countdown.
+let clockOffset = 0;
+let clockSynced = false;
+let bestSyncRtt = Infinity;
+let syncTimer: ReturnType<typeof setTimeout> | null = null;
+
+function runTimeSync() {
+  if (syncTimer) return; // a burst is already in flight
+  bestSyncRtt = Infinity;
+  let sent = 0;
+  const probe = () => {
+    syncTimer = null;
+    if (!send({ t: "timeSync", t0: Date.now() })) return;
+    if (++sent < 5) syncTimer = setTimeout(probe, 150);
+  };
+  probe();
+}
+
+function onTimeSyncPong(t0: number, serverNow: number) {
+  const rtt = Date.now() - t0;
+  if (rtt < 0 || rtt > 1000) return; // discard outliers
+  if (rtt < bestSyncRtt) {
+    bestSyncRtt = rtt;
+    clockOffset = serverNow - (t0 + rtt / 2);
+    clockSynced = true;
+  }
+}
 
 const handlers: Handlers = {};
 
@@ -81,6 +117,7 @@ function open() {
     // replay identity + queue intent
     if (profile) send({ t: "identify", nick: profile.nick, solAddress: profile.solAddress, look: profile.look });
     if (queuedMode) send({ t: "joinQueue", mode: queuedMode });
+    runTimeSync();
   };
 
   ws.onclose = () => {
@@ -122,8 +159,20 @@ function dispatch(msg: ServerMsg) {
       handlers.onMatchStart?.(msg);
       break;
     case "beginCountdown":
-      console.log("[net] received beginCountdown from server");
-      handlers.onBeginCountdown?.();
+      console.log("[net] received beginCountdown from server, goAt", msg.goAtEpochMs, "offset", Math.round(clockOffset));
+      handlers.onBeginCountdown?.(msg.goAtEpochMs);
+      break;
+    case "timeSyncPong":
+      onTimeSyncPong(msg.t0, msg.serverNow);
+      break;
+    case "playersDropped":
+      handlers.onPlayersDropped?.(msg);
+      break;
+    case "matchMissed":
+      handlers.onMatchMissed?.(msg);
+      break;
+    case "matchAborted":
+      handlers.onMatchAborted?.(msg);
       break;
     case "chatMsg":
       handlers.onChatMsg?.(msg);
@@ -184,6 +233,17 @@ export const net = {
   joinQueue(mode: GameMode) {
     queuedMode = mode;
     send({ t: "joinQueue", mode });
+    runTimeSync(); // refresh the clock offset before the upcoming match
+  },
+
+  // Convert a server-clock epoch ms into local-clock epoch ms (identity if sync failed —
+  // then the countdown is merely un-offset, never frozen).
+  serverEpochToLocal(serverMs: number): number {
+    return serverMs - clockOffset;
+  },
+
+  isClockSynced(): boolean {
+    return clockSynced;
   },
 
   leaveQueue() {

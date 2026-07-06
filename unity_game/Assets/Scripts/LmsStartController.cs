@@ -19,7 +19,7 @@ public class LmsStartController : MonoBehaviour
     public string topLayerName = "Layer_0";
 
     private GameObject startHex;
-    private readonly List<GameObject> remoteHexes = new List<GameObject>();
+    private readonly Dictionary<int, GameObject> remoteHexes = new Dictionary<int, GameObject>(); // keyed by spawnIndex
 
     void Start()
     {
@@ -64,7 +64,7 @@ public class LmsStartController : MonoBehaviour
                 Vector3 rPos = new Vector3(rTile.position.x, rTile.position.y + dropHeight, rTile.position.z);
                 // collider OFF: remote beans are snapshot-driven (their own client does the standing);
                 // a solid floating hex could snag the local bean mid-match if flung through its spot.
-                remoteHexes.Add(CloneStartHex(rTile, rPos, "StartHex_Remote_" + idx, false));
+                remoteHexes[idx] = CloneStartHex(rTile, rPos, "StartHex_Remote_" + idx, false);
             }
         }
 
@@ -95,13 +95,24 @@ public class LmsStartController : MonoBehaviour
         return hex;
     }
 
+    // A remote player was dropped from the match before GO (never loaded) — remove their floating
+    // start hex so it doesn't hang around (or vanish "empty" at GO). Called by NetBridge.
+    public void RemoveRemoteHex(int spawnIndex)
+    {
+        if (remoteHexes.TryGetValue(spawnIndex, out var hex))
+        {
+            HideHex(hex);
+            remoteHexes.Remove(spawnIndex);
+        }
+    }
+
     void Vanish()
     {
         // GO is server-synchronized, so hiding the remote hexes here matches the moment each remote's
         // own client drops their bean.
         HideHex(startHex);
         startHex = null;
-        foreach (var h in remoteHexes) HideHex(h);
+        foreach (var h in remoteHexes.Values) HideHex(h);
         remoteHexes.Clear();
     }
 

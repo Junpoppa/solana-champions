@@ -218,8 +218,10 @@ function handle(player: Player, msg: ClientMsg): void {
       if (now - player.lastChatMs < 500) break; // simple rate-limit: max ~2 msgs/sec
       player.lastChatMs = now;
       const out: ServerMsg = { t: "chatMsg", id: player.id, nick: player.nick, text, ts: now };
-      // Lobby-only: deliver to identified players NOT in a queue/match (roomMode === null).
-      for (const p of players) if (p.identified && p.roomMode === null) p.send(out);
+      // Deliver to everyone who isn't actively inside a match — lobby, waitlisted and pending
+      // players included (the old roomMode===null gate silently killed chat for anyone queued,
+      // i.e. for the whole group the moment they re-JOINed after a match).
+      for (const p of players) if (p.identified && !rm.isInActiveMatch(p)) p.send(out);
       break;
     }
     default: {

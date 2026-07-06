@@ -50,4 +50,12 @@ export class RoomManager {
   markReady(p: Player): void {
     if (p.roomMode) this.get(p.roomMode).markReady(p);
   }
+
+  // True only while the player is actually INSIDE a starting/running match. Queued and
+  // pending players are not "in a match" — they still get lobby chat, for example.
+  isInActiveMatch(p: Player): boolean {
+    if (!p.roomMode) return false;
+    const room = this.get(p.roomMode);
+    return (room.phase === "starting" || room.phase === "running") && room.players.includes(p);
+  }
 }

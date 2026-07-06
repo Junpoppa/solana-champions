@@ -158,6 +158,9 @@ function dispatch(msg: ServerMsg) {
       handlers.onQueueUpdate?.(msg);
       break;
     case "matchStart":
+      // We're IN the match now — a reconnect mid-match must not silently re-queue us. (The
+      // WINNER never calls reportResult, so clearing there alone left their intent stale.)
+      queuedMode = null;
       handlers.onMatchStart?.(msg);
       break;
     case "beginCountdown":
@@ -174,9 +177,11 @@ function dispatch(msg: ServerMsg) {
       handlers.onPlayersDropped?.(msg);
       break;
     case "matchMissed":
+      queuedMode = msg.mode; // server re-queued us — a reconnect should keep us in that line
       handlers.onMatchMissed?.(msg);
       break;
     case "matchAborted":
+      queuedMode = msg.mode; // back at the queue front — same reconnect intent
       handlers.onMatchAborted?.(msg);
       break;
     case "chatMsg":

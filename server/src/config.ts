@@ -31,7 +31,7 @@ export interface ModeRules {
   fillCountdownMs: number;
 }
 const MIN_TO_START = num("MIN_TO_START", 6);
-const FILL_MS = num("FILL_COUNTDOWN_MS", 60_000);
+const FILL_MS = num("FILL_COUNTDOWN_MS", 30_000);
 export const MODE_RULES: Record<string, ModeRules> = {
   lastman: { capacity: num("LMS_CAPACITY", 20), minToStart: MIN_TO_START, fillCountdownMs: FILL_MS },
   spinner: { capacity: num("SPINNER_CAPACITY", 15), minToStart: MIN_TO_START, fillCountdownMs: FILL_MS },

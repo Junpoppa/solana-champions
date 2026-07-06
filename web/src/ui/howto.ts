@@ -105,9 +105,18 @@ export function showHowTo(mode: GameMode) {
     </div>`;
   box.classList.remove("fade");
   box.classList.add("show");
-  // Safety net: never stick around forever if the countdown signal is lost.
+  // Safety net: never stick around forever if the countdown signal is lost. Must exceed the
+  // server's 90s load window (slow first-visit downloads) + countdown, or the card vanishes
+  // onto a frozen pre-GO scene while the room is still waiting for players.
   if (hideTimer) window.clearTimeout(hideTimer);
-  hideTimer = window.setTimeout(hideHowTo, 30000);
+  hideTimer = window.setTimeout(hideHowTo, 110000);
+}
+
+// Loading progress while the room waits for everyone ("Waiting for players — 2/4 loaded…").
+// Replaces the pulsing status line at the card's bottom; reverts naturally on the next showHowTo.
+export function setHowToStatus(text: string) {
+  const wait = el?.querySelector<HTMLElement>(".ht-wait");
+  if (wait) wait.textContent = text;
 }
 
 export function hideHowTo() {

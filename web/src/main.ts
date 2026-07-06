@@ -14,6 +14,7 @@ import { Standings } from "./ui/standings";
 import { net } from "./net";
 import { loadProfile } from "./profile";
 import { setPlayerHudRoster } from "./ui/playerHud";
+import { setHowToStatus } from "./ui/howto";
 
 // HYBRID app: JS shell (identity + start menu + lobby + customizer, with a Three.js bean preview) wraps
 // the real Unity WebGL game. Multiplayer v1: JOIN enters a per-mode waitlist on the server; when the
@@ -164,6 +165,10 @@ async function main() {
     onSnapshot: (raw) => { unityGame.pushSnapshot(raw); },
     // Synchronized start: the server fixed an absolute GO instant — every client unfreezes at it.
     onBeginCountdown: (goAtEpochMs) => { unityGame.beginCountdown(goAtEpochMs); },
+    // Loading progress while the room waits for everyone (slow first-visit downloads take a while).
+    onReadyUpdate: (m) => {
+      if (appState === "unity") setHowToStatus(`Waiting for players to load — ${m.ready}/${m.total} ready…`);
+    },
     // Some players never loaded and were dropped from the match: despawn their avatars + shrink the HUD.
     onPlayersDropped: (m) => {
       matchRoster = matchRoster.filter((r) => !m.ids.includes(r.id));

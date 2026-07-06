@@ -13,7 +13,11 @@ export const config = {
   MATCH_WATCHDOG_MS: num("MATCH_WATCHDOG_MS", 1_800_000),
   GO_LEAD_MS: num("GO_LEAD_MS", 3_800), // beginCountdown → GO lead: 3s of digits + latency headroom
   SNAPSHOT_MS: num("SNAPSHOT_MS", 66), // ~15 Hz avatar pose fan-out
-  BEGIN_TIMEOUT_MS: num("BEGIN_TIMEOUT_MS", 12_000), // max wait for all clients to load before starting the countdown
+  // Max wait for all clients to load before starting the countdown WITHOUT the stragglers.
+  // Must cover a first-visit download of the ~34MB WebGL build on ordinary internet — 12s kicked
+  // every fresh player (s31 live-test failure). 90s only drops genuinely stalled clients
+  // (hidden tabs, dead connections). Keep IntroCountdown.cs's local fallback ABOVE this value.
+  BEGIN_TIMEOUT_MS: num("BEGIN_TIMEOUT_MS", 90_000),
   ALLOWED_ORIGIN: process.env.ALLOWED_ORIGIN || "", // empty = allow any (dev)
 };
 

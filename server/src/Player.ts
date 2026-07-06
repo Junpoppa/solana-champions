@@ -10,6 +10,7 @@ export class Player {
   identified = false;
   connected = true;
   isAlive = true; // heartbeat flag
+  missedPings = 0; // consecutive heartbeat misses (2 strikes — a game download can delay pongs)
   lastChatMs = 0; // lobby-chat rate-limit timestamp
 
   // per-room / per-match state

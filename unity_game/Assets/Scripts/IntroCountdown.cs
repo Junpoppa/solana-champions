@@ -68,10 +68,11 @@ public class IntroCountdown : MonoBehaviour
             }
             NetReady(); // → JS reports ready; server broadcasts beginCountdown → BeginCountdownAt()
             // Safety net: if the synchronized begin never arrives, start locally so the match can NEVER
-            // hard-freeze. 15 s > the server's 12 s begin-timeout, so this only fires on genuine failure.
+            // hard-freeze. MUST exceed the server's BEGIN_TIMEOUT_MS (90 s — covers first-visit downloads
+            // of the ~34MB build), else loaded players false-start unsynced while the room still waits.
             // Absolute-time based: a hidden tab can't fire it early (Update doesn't run while hidden),
             // and on resume the real begin — if it arrived meanwhile — wins via `begun`.
-            fallbackDeadlineMs = NowMs() + 15000.0;
+            fallbackDeadlineMs = NowMs() + 100000.0;
         }
         else BeginCountdown();
     }

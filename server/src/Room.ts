@@ -102,7 +102,13 @@ export class Room {
     if (this.phase !== "running" || this.beginFired) return;
     if (!this.players.includes(p)) return;
     this.readyIds.add(p.id);
-    if (this.readyIds.size >= this.players.length) this.fireBegin();
+    if (this.readyIds.size >= this.players.length) {
+      this.fireBegin();
+      return;
+    }
+    // Loading progress for the players already in — their how-to card shows "X/Y loaded".
+    const msg: ServerMsg = { t: "readyUpdate", mode: this.mode, ready: this.readyIds.size, total: this.players.length };
+    for (const q of this.players) if (q.connected) q.send(msg);
   }
 
   private fireBegin(): void {

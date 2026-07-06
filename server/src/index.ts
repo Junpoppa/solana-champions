@@ -232,9 +232,16 @@ function handle(player: Player, msg: ClientMsg): void {
 const HEARTBEAT_MS = 30_000;
 const heartbeat = setInterval(() => {
   for (const p of players) {
+    // Two-strike rule: a pong can be badly delayed while the client downloads the ~34MB game
+    // on a slow connection — only terminate after 2 consecutive missed cycles (~60-90s dead).
     if (!p.isAlive) {
-      p.ws.terminate();
-      continue;
+      p.missedPings++;
+      if (p.missedPings >= 2) {
+        p.ws.terminate();
+        continue;
+      }
+    } else {
+      p.missedPings = 0;
     }
     p.isAlive = false;
     try {

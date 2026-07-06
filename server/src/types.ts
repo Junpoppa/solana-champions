@@ -78,6 +78,7 @@ export type ServerMsg =
   | { t: "matchStart"; mode: GameMode; matchId: string; seed: number; startAtEpochMs: number; roster: MatchRosterEntry[] }
   | { t: "beginCountdown"; goAtEpochMs: number } // GO fires at this SERVER-clock instant on every client
   | { t: "timeSyncPong"; t0: number; serverNow: number } // reply to timeSync (echoes t0 for RTT)
+  | { t: "readyUpdate"; mode: GameMode; ready: number; total: number } // loading progress while waiting for all players
   | { t: "playersDropped"; mode: GameMode; ids: string[] } // these players missed the start; despawn their avatars
   | { t: "matchMissed"; mode: GameMode; requeued: boolean } // you missed the start; you're re-queued for the next match
   | { t: "matchAborted"; mode: GameMode } // <2 players were ready — match cancelled, back to the queue

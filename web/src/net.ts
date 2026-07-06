@@ -14,6 +14,7 @@ import type {
   PlayersDroppedMsg,
   MatchMissedMsg,
   MatchAbortedMsg,
+  ReadyUpdateMsg,
 } from "./netTypes";
 
 // WS address resolution:
@@ -32,6 +33,7 @@ interface Handlers {
   onMatchStart?: (m: MatchStartMsg) => void;
   onSnapshot?: (raw: string) => void; // high-freq avatar poses; raw JSON forwarded to Unity
   onBeginCountdown?: (goAtEpochMs: number) => void; // GO fires at this server-clock instant, same for all players
+  onReadyUpdate?: (m: ReadyUpdateMsg) => void; // loading progress while the room waits for all players
   onPlayersDropped?: (m: PlayersDroppedMsg) => void; // players who missed the start — despawn their avatars
   onMatchMissed?: (m: MatchMissedMsg) => void; // we missed the start; server re-queued us
   onMatchAborted?: (m: MatchAbortedMsg) => void; // match cancelled (<2 ready) — back to the queue
@@ -164,6 +166,9 @@ function dispatch(msg: ServerMsg) {
       break;
     case "timeSyncPong":
       onTimeSyncPong(msg.t0, msg.serverNow);
+      break;
+    case "readyUpdate":
+      handlers.onReadyUpdate?.(msg);
       break;
     case "playersDropped":
       handlers.onPlayersDropped?.(msg);

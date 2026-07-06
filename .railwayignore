@@ -1,0 +1,13 @@
+# railway up uploads the working dir — the Docker build only needs web/ + server/ (+ Dockerfile).
+# Everything else (especially the 1GB Unity project) must stay out of the upload.
+.git
+unity_game
+files
+FallDudes.rar
+*.rar
+web/node_modules
+web/dist
+server/node_modules
+server/dist
+start-multiplayer.bat
+_spin.bat

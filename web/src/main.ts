@@ -178,13 +178,23 @@ async function main() {
     onReadyUpdate: (m) => {
       if (appState === "unity") setHowToStatus(`Waiting for players to load — ${m.ready}/${m.total} ready…`);
     },
-    // Some players never loaded and were dropped from the match: despawn their avatars + shrink the HUD.
+    // Players were dropped from the match (never loaded, or AFK mid-match — hidden tab froze
+    // their game): despawn their avatars + shrink the HUD.
     onPlayersDropped: (m) => {
       if (appState === "spectate") {
         removeSpectatorPlayers(m.ids);
-      } else {
-        matchRoster = matchRoster.filter((r) => !m.ids.includes(r.id));
-        setPlayerHudRoster(matchRoster, myId);
+        unityGame.pushPlayersDropped(JSON.stringify({ ids: m.ids }));
+        return;
+      }
+      matchRoster = matchRoster.filter((r) => !m.ids.includes(r.id));
+      setPlayerHudRoster(matchRoster, myId);
+      // WE are one of the dropped (tab hidden mid-match → server AFK-eliminated us). Our result
+      // is already recorded server-side as a loss — tear down the game and wait for standings.
+      if (myId && m.ids.includes(myId)) {
+        unityGame.hide();
+        setState("lobby");
+        if (!standingsShown) standings.showWaiting();
+        return;
       }
       unityGame.pushPlayersDropped(JSON.stringify({ ids: m.ids }));
     },

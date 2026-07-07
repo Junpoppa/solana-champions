@@ -20,6 +20,7 @@ export class Player {
   result: MatchResult | null = null;
   spawnIndex = 0; // assigned at match start
   pose: Pose | null = null; // latest live pose (for avatar snapshots)
+  lastPoseAt: number | null = null; // when that pose arrived — stale = hidden tab / dead client (AFK watchdog)
 
   constructor(id: string, ws: WebSocket) {
     this.id = id;

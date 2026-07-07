@@ -189,6 +189,14 @@ public class WebBridge : MonoBehaviour
         else ic.BeginCountdown();
     }
 
+    void Awake()
+    {
+        // Keep simulating when the canvas loses focus (alt-tab, other window): a multiplayer match
+        // must keep running — beams/hazards still hit an unfocused player. A fully HIDDEN tab still
+        // pauses (browser stops rAF; nothing can prevent that) — the server AFK watchdog covers it.
+        Application.runInBackground = true;
+    }
+
     void Start()
     {
         // Restore look/sensitivity carried across a scene swap (this WebBridge spawned fresh in the new scene).

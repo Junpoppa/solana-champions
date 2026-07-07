@@ -20,6 +20,10 @@ export const config = {
   // (hidden tabs, dead connections). Keep IntroCountdown.cs's local fallback ABOVE this value.
   BEGIN_TIMEOUT_MS: num("BEGIN_TIMEOUT_MS", 90_000),
   WATCH_CAP: num("WATCH_CAP", 5), // max live spectators per room
+  // Mid-match AFK watchdog: a player whose poses stop for this long after GO (hidden tab —
+  // Unity WebGL pauses but the socket stays open — or a dead pipe) is eliminated with a
+  // losing placement. Clients stream poses at ~15 Hz, so 4s of silence is unambiguous.
+  POSE_STALE_MS: num("POSE_STALE_MS", 4_000),
   ALLOWED_ORIGIN: process.env.ALLOWED_ORIGIN || "", // empty = allow any (dev)
 };
 

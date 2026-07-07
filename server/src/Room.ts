@@ -169,7 +169,11 @@ export class Room {
   setPose(p: Player, pose: Pose): void {
     if (this.phase !== "running") return;
     if (!this.players.includes(p)) return;
+    // An AFK-dropped player's Unity resumes when they un-hide the tab — swallow the poses
+    // so the despawned bean doesn't resurrect on everyone else's screen.
+    if (p.result?.reason === "afk") return;
     p.pose = pose;
+    p.lastPoseAt = Date.now();
   }
 
   // A client's gameplay scene is loaded and frozen, waiting for the synchronized countdown.
@@ -283,6 +287,7 @@ export class Room {
       p.matchId = this.matchId;
       p.result = null;
       p.pose = null;
+      p.lastPoseAt = null;
       p.spawnIndex = i;
     });
 
@@ -486,9 +491,37 @@ export class Room {
     }
   }
 
+  // Mid-match AFK watchdog (rides the snapshot tick): a live player whose poses stopped
+  // for POSE_STALE_MS after GO is a hidden tab (Unity WebGL pauses, socket stays open) or
+  // a dead pipe. Eliminate them with a losing placement so a frozen ghost can never be the
+  // last one standing, and despawn their bean everywhere via playersDropped.
+  private checkStalePlayers(): void {
+    if (this.phase !== "running" || !this.beginFired || !this.goAtEpochMs) return;
+    const now = Date.now();
+    const cutoff = now - config.POSE_STALE_MS;
+    if (this.goAtEpochMs > cutoff) return; // give everyone POSE_STALE_MS after GO to stream
+    const stale = this.players.filter(
+      (p) => !p.result && p.connected && (p.lastPoseAt ?? this.goAtEpochMs) < cutoff,
+    );
+    if (stale.length === 0) return;
+    for (const p of stale) {
+      // Survival credited only up to their last live pose — strictly below any real
+      // survivor (endMatch synthesizes elapsedSinceGo()+1), so rank() places them as a loser.
+      const lastLiveMs = Math.max(0, (p.lastPoseAt ?? this.goAtEpochMs) - this.goAtEpochMs);
+      p.result = { survivalMs: lastLiveMs, finished: false, reason: "afk", reportedAt: now };
+      p.pose = null; // stop fanning the frozen pose (a late snapshot would resurrect the bean)
+    }
+    const msg: ServerMsg = { t: "playersDropped", mode: this.mode, ids: stale.map((p) => p.id) };
+    for (const p of this.players) if (p.connected) p.send(msg);
+    for (const w of this.watchers) if (w.connected) w.send(msg);
+    log(`[${this.mode}] match ${this.matchId} AFK-dropped ${stale.map((p) => p.nick || p.id).join(", ")} (no poses for ${config.POSE_STALE_MS}ms)`);
+    this.maybeEnd();
+  }
+
   // Fan out every player's latest pose to everyone in the match (~15 Hz). Each client
   // ignores its own id and interpolates the rest.
   private broadcastSnapshot(): void {
+    this.checkStalePlayers();
     const poses: { id: string; q: Pose }[] = [];
     for (const p of this.players) if (p.pose) poses.push({ id: p.id, q: p.pose });
     if (poses.length === 0) return;

@@ -36,7 +36,7 @@ export interface Pose {
   cp: number; // camera pitch (CameraManager.tiltAngle)
 }
 
-export type ResultReason = "died" | "finished" | "timeout" | "disconnect" | "winner";
+export type ResultReason = "died" | "finished" | "timeout" | "disconnect" | "winner" | "afk";
 
 export interface MatchResult {
   survivalMs: number;

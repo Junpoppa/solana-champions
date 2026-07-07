@@ -195,6 +195,13 @@ public class WebBridge : MonoBehaviour
         // must keep running — beams/hazards still hit an unfocused player. A fully HIDDEN tab still
         // pauses (browser stops rAF; nothing can prevent that) — the server AFK watchdog covers it.
         Application.runInBackground = true;
+#if UNITY_WEBGL && !UNITY_EDITOR
+        // Only take keyboard input while the canvas is focused. The default (true) grabs keydown at
+        // the WINDOW level for the whole page lifetime — after the first match the (hidden but alive)
+        // instance ate every keystroke, so DOM inputs like the lobby chat went dead. The JS shell
+        // focuses the canvas on launch/click/visibility-restore, so gameplay keys are unaffected.
+        WebGLInput.captureAllKeyboardInput = false;
+#endif
     }
 
     void Start()

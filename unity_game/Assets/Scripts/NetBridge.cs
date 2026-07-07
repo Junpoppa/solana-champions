@@ -24,10 +24,12 @@ public class NetBridge : MonoBehaviour
 
     // ---- match info (cached statically so the gameplay scene reads it after the Boot→mode swap) ----
     [System.Serializable] private class RosterEntry { public string id; public string nick; public string look; public int spawnIndex; }
-    [System.Serializable] private class MatchInfo { public int seed; public double startAtEpochMs; public string matchId; public string myId; public RosterEntry[] roster; }
+    [System.Serializable] private class MatchInfo { public int seed; public double startAtEpochMs; public string matchId; public string myId; public RosterEntry[] roster; public int[] vanishedHexes; }
+    [System.Serializable] private class HexIdxs { public int[] idxs; }
     // Pose wire: position(x,y,z) + yaw(r) + planar speed(s) + airborne(a) + downed(d) + inSecondJump(j)
-    // + fling velocity(fx,fy,fz) streamed while ragdolled so remotes replay the same knockdown.
-    [System.Serializable] private class PoseQ { public float x, y, z, r, s, a, d, j, fx, fy, fz; }
+    // + fling velocity(fx,fy,fz) streamed while ragdolled so remotes replay the same knockdown
+    // + camera yaw/pitch(cy,cp) so spectators can reproduce this player's exact view.
+    [System.Serializable] private class PoseQ { public float x, y, z, r, s, a, d, j, fx, fy, fz, cy, cp; }
     [System.Serializable] private class SnapPlayer { public string id; public PoseQ q; }
     [System.Serializable] private class Snapshot { public SnapPlayer[] players; }
     [System.Serializable] private class DroppedIds { public string[] ids; }
@@ -70,6 +72,7 @@ public class NetBridge : MonoBehaviour
         public bool tDowned;
         public bool tJump;
         public Vector3 tFling;
+        public float tCy, tCp; // this player's camera yaw/pitch (spectator view replication)
         public bool active;
         public bool wasDowned;
         // look (retry until the remote's "Character mesh" exists — insurance vs a not-yet-realized mesh)
@@ -88,6 +91,7 @@ public class NetBridge : MonoBehaviour
     private Transform localModel; // the BeanModel (animator) transform = visible bean
     private bool spawnedRemotes;
     private float sendAccum;
+    private SpectatorCamera specCam; // spectator mode only (created in TrySpawnRemotes)
 
     // ---- JS → Unity ----
     public void OnMatchInfo(string json)
@@ -123,6 +127,51 @@ public class NetBridge : MonoBehaviour
         s_info.roster = keep.ToArray();
     }
 
+    // ---- spectator commands from the DOM overlay (SendMessage targets) ----
+    public void SpectateFocus(string id)
+    {
+        if (specCam != null) specCam.Focus(id);
+    }
+
+    // arg: "free" / "player" = explicit mode (HUD buttons), anything else = toggle (Tab/F keys).
+    public void SpectateFreeCam(string arg)
+    {
+        if (specCam == null) return;
+        if (arg == "free") specCam.SetFreeCam(true);
+        else if (arg == "player") specCam.SetFreeCam(false);
+        else specCam.ToggleFreeCam();
+    }
+
+    // ---- spectator camera data access (roster order + live targets) ----
+    // Ids in roster order, restricted to still-spawned remotes — the LMB/RMB cycle order.
+    public List<string> SpectateIds()
+    {
+        var ids = new List<string>();
+        if (s_info != null && s_info.roster != null)
+            foreach (var e in s_info.roster)
+                if (remotes.ContainsKey(e.id)) ids.Add(e.id);
+        return ids;
+    }
+
+    public bool TryGetSpectateTarget(string id, out Transform root, out float camYaw, out float camPitch)
+    {
+        root = null; camYaw = 0f; camPitch = 0f;
+        if (id == null || !remotes.TryGetValue(id, out var r) || r.root == null) return false;
+        root = r.root;
+        camYaw = r.tCy;
+        camPitch = r.tCp;
+        return true;
+    }
+
+    // Watched match: the server relayed LMS tiles vanished by the players — apply with animation.
+    public void OnHexVanish(string json)
+    {
+        HexIdxs d;
+        try { d = JsonUtility.FromJson<HexIdxs>(json); }
+        catch { return; }
+        if (d != null) HexNet.ApplyVanished(d.idxs, false);
+    }
+
     public void OnSnapshot(string json)
     {
         Snapshot snap;
@@ -141,6 +190,8 @@ public class NetBridge : MonoBehaviour
             r.tDowned = p.q.d > 0.5f;
             r.tJump = p.q.j > 0.5f;
             r.tFling = new Vector3(p.q.fx, p.q.fy, p.q.fz);
+            r.tCy = p.q.cy;
+            r.tCp = p.q.cp;
             if (!r.active)
             {
                 r.active = true;
@@ -170,11 +221,15 @@ public class NetBridge : MonoBehaviour
             bool downed = local.IsRagdolled;
             bool secondJump = localAnim != null && localAnim.GetBool("InSecondJump");
             Vector3 fling = (downed && localRag != null) ? localRag.LastFlingVel : Vector3.zero;
+            var cm = CameraManager.singleton;
+            float camYaw = cm != null ? cm.lookAngle : 0f;
+            float camPitch = cm != null ? cm.tiltAngle : 0f;
             NetSend(
                 "{\"x\":" + F(p.x) + ",\"y\":" + F(p.y) + ",\"z\":" + F(p.z) +
                 ",\"r\":" + F(yaw) + ",\"s\":" + F(s) + ",\"a\":" + (air ? 1 : 0) +
                 ",\"d\":" + (downed ? 1 : 0) + ",\"j\":" + (secondJump ? 1 : 0) +
-                ",\"fx\":" + F(fling.x) + ",\"fy\":" + F(fling.y) + ",\"fz\":" + F(fling.z) + "}");
+                ",\"fx\":" + F(fling.x) + ",\"fy\":" + F(fling.y) + ",\"fz\":" + F(fling.z) +
+                ",\"cy\":" + F(camYaw) + ",\"cp\":" + F(camPitch) + "}");
         }
 
         // interpolate + animate remotes
@@ -247,6 +302,16 @@ public class NetBridge : MonoBehaviour
         localModel = localAnim != null ? localAnim.transform : local.transform;
         RuntimeAnimatorController controller = localAnim != null ? localAnim.runtimeAnimatorController : null;
 
+        // Spectator: the scene Player only serves as the animator-controller source (BeanLocomotion
+        // is not in Resources). Harvest it, then remove the bean entirely — a watcher has no avatar,
+        // streams no pose, and must not occupy a spawn or trip kill zones.
+        bool spectating = WebBridge.Spectator;
+        if (spectating)
+        {
+            local.transform.root.gameObject.SetActive(false);
+            local = null; localRb = null; localRag = null; localCapsule = null; localAnim = null; localModel = null;
+        }
+
         // Ragdoll-capable remote bean (harvested from the player's tuned ragdoll). Falls back to the plain
         // physics-free prefab if the ragdoll variant is missing (remote just won't do the real fling).
         var src = Resources.Load<GameObject>("Prefabs/character_default_ragdoll");
@@ -297,5 +362,27 @@ public class NetBridge : MonoBehaviour
             remotes[e.id] = new Remote { root = root.transform, model = model.transform, anim = ra, rag = rr, look = e.look };
         }
         spawnedRemotes = true;
+
+        if (spectating) SetupSpectator();
+    }
+
+    // Watcher world setup, once per scene: spectator camera, OS cursor, and the match's hex-state backlog.
+    private void SetupSpectator()
+    {
+        if (CameraManager.singleton != null) CameraManager.singleton.enabled = false;
+        var rig = new GameObject("SpectatorRig");
+        specCam = rig.AddComponent<SpectatorCamera>();
+        specCam.Init(this);
+
+        // The overlay (roster clicks / Wide / Exit) needs the real cursor — undo CharacterControls' lock.
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+
+        // Late-join LMS state: tiles the players already vanished disappear instantly.
+        if (s_info != null && s_info.vanishedHexes != null && s_info.vanishedHexes.Length > 0)
+            HexNet.ApplyVanished(s_info.vanishedHexes, true);
+
+        Debug.Log("[NetBridge] spectator setup: " + remotes.Count + " remote(s), hex backlog "
+            + (s_info != null && s_info.vanishedHexes != null ? s_info.vanishedHexes.Length : 0));
     }
 }

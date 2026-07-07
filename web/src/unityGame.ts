@@ -10,6 +10,7 @@ import type { GameMode } from "./ui/lobby";
 import { initCountdown, hideCountdown } from "./ui/countdown";
 import { showHowTo, hideHowTo } from "./ui/howto";
 import { initPlayerHud, hidePlayerHud } from "./ui/playerHud";
+import { showSpectatorHud, hideSpectatorHud, setSpectatorState } from "./ui/spectator";
 import { net } from "./net";
 import { musicController } from "./ui/musicController";
 
@@ -37,6 +38,11 @@ let readyTimer: number | null = null;
 // Launch-session token: bumped on every launch()/hide(). A launch continuation that awaits the
 // (slow) build download must not re-show the canvas if the match was missed/torn down meanwhile.
 let session = 0;
+// Spectating: no local bean, OS cursor stays free for the overlay (pointer-lock is skipped) —
+// EXCEPT while the free-fly camera is active, which needs mouse-look (Unity locks the cursor;
+// the gesture fallback below may re-lock after a browser Esc).
+let spectating = false;
+let specFreeCam = false;
 
 function injectStyles() {
   if (document.getElementById("unityStyles")) return;
@@ -77,12 +83,26 @@ function buildDom() {
   // mousedown handler — a player who pans without ever clicking would still edge-clamp. Request the lock
   // on ANY gesture (keydown counts as user activation in modern browsers) while the game is visible.
   const tryLock = () => {
+    if (spectating && !specFreeCam) return; // spectator overlay needs the OS cursor (free cam doesn't)
     if (!container?.classList.contains("show")) return;
     if (document.pointerLockElement === canvas) return;
     try { (canvas.requestPointerLock() as any)?.catch?.(() => {}); } catch { /* gesture rejected — click will lock */ }
   };
   canvas.addEventListener("mousedown", tryLock);
   window.addEventListener("keydown", tryLock);
+  // Spectator right-click cycles players — never open the browser context menu over the game.
+  container.addEventListener("contextmenu", (e) => { if (spectating) e.preventDefault(); });
+  // Spectator Tab = switch player cam ↔ free cam. Capture phase + preventDefault so it never
+  // tab-navigates the DOM; handled here (not Unity) so it works regardless of canvas focus.
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (!spectating || e.key !== "Tab") return;
+      e.preventDefault();
+      instance?.SendMessage("NetBridge", "SpectateFreeCam", "toggle");
+    },
+    true,
+  );
   return canvas;
 }
 
@@ -153,8 +173,11 @@ export const unityGame = {
     (window as any).__unityMatchResult = (r: { survivalMs?: number; finished?: boolean }) => {
       onResult?.(Number(r?.survivalMs) || 0, !!r?.finished);
     };
+    spectating = false;
     // Live avatars: Unity streams the local bean's pose (raw JSON) → server ~15 Hz.
     (window as any).__unityNetSend = (s: string) => net.sendState(s);
+    // LMS spectator hex sync: our LOCAL bean stepped a hex — report the tile index.
+    (window as any).__unityHexVanish = (idx: number) => net.sendHexVanish(idx);
     // Synchronized start: Unity's IntroCountdown tells us the scene is loaded + frozen → we report ready.
     // Hold the ready until the how-to card has been visible ≥ MIN_HOWTO_MS so players always get a
     // moment to read it (server starts 3·2·1 only once EVERY player reported ready).
@@ -204,6 +227,69 @@ export const unityGame = {
     unityGame.setSfxVolume(loadSettings().sfxVolume);
     unityGame.applyLook(loadLook());
   },
+
+  // Spectate a running match: same Unity build, but SetMatchConfig carries spectator:true —
+  // the scene deactivates the local Player, renders the whole roster as remote beans and drives
+  // a free overhead/chase camera. No how-to card, no countdown overlay, no ready handshake,
+  // no result reporting. The DOM spectator HUD supplies focus/wide/exit controls.
+  async launchSpectate(
+    mode: GameMode,
+    ctx: {
+      seed: number;
+      startAtEpochMs: number;
+      goAtEpochMs: number;
+      matchId: string;
+      matchInfoJson: string;
+      roster: { id: string; nick: string }[];
+    },
+    onExit: () => void,
+  ) {
+    spectating = true;
+    specFreeCam = false;
+    // Unity's SpectatorCamera reports every mode/focus change — keep the overlay + lock policy in sync.
+    (window as any).__unitySpectateState = (s: { mode?: string; id?: string }) => {
+      specFreeCam = s?.mode === "free";
+      setSpectatorState(s || {});
+    };
+    const mySession = ++session;
+    await ensureLoaded();
+    if (mySession !== session) return; // match ended / user left while the build was downloading
+    container?.classList.add("show");
+    // Spectator keeps the OS cursor — release a stale lock from a previous played match.
+    if (document.pointerLockElement) document.exitPointerLock();
+    instance?.SendMessage("WebBridge", "LoadGameScene", SCENE_BY_MODE[mode] ?? "Course");
+    instance?.SendMessage(
+      "WebBridge",
+      "SetMatchConfig",
+      JSON.stringify({
+        mode,
+        multiplayer: true,
+        spectator: true,
+        seed: ctx.seed,
+        startAtEpochMs: ctx.startAtEpochMs,
+        matchId: ctx.matchId,
+      }),
+    );
+    // Full roster (with looks + spawn slots + vanished hexes); our id is absent from it, so
+    // NetBridge renders EVERY entry as a remote bean.
+    instance?.SendMessage("NetBridge", "OnMatchInfo", ctx.matchInfoJson);
+    // The match is long past (or inside) its countdown: hand Unity the absolute GO instant.
+    // SetMatchConfig zeroed the pending GO, so this must come AFTER it. A past instant = instant GO.
+    const goAtLocal = Math.round(net.serverEpochToLocal(ctx.goAtEpochMs));
+    instance?.SendMessage("WebBridge", "BeginCountdown", String(goAtLocal));
+    unityGame.setSfxVolume(loadSettings().sfxVolume);
+    musicController.startGame(mode);
+    // Keyboard (F toggle, free-fly WASD) needs the canvas focused.
+    document.getElementById("unity-canvas")?.focus();
+    showSpectatorHud(mode, ctx.roster, {
+      onFocus: (id) => instance?.SendMessage("NetBridge", "SpectateFocus", id),
+      onSetMode: (m) => {
+        instance?.SendMessage("NetBridge", "SpectateFreeCam", m);
+        document.getElementById("unity-canvas")?.focus(); // button stole focus — give it back for WASD
+      },
+      onExit,
+    });
+  },
   // JS → Unity: drives CameraManager.mouseSpeed via the WebBridge GameObject. No-op until loaded.
   // Guard: SendMessage with a non-number (undefined/NaN from corrupted settings) takes Unity's string
   // path and throws "str.charCodeAt is not a function" — send only finite numbers.
@@ -245,8 +331,15 @@ export const unityGame = {
   pushPlayersDropped(idsJson: string) {
     instance?.SendMessage("NetBridge", "OnPlayersDropped", idsJson);
   },
+  // Watched match: LMS tiles vanished (server relay) — apply to our world state.
+  pushHexVanish(json: string) {
+    instance?.SendMessage("NetBridge", "OnHexVanish", json);
+  },
   hide() {
     session++; // invalidate any launch() continuation still awaiting the build
+    spectating = false;
+    specFreeCam = false;
+    (window as any).__unitySpectateState = null;
     container?.classList.remove("show");
     // Give the OS cursor back for the DOM lobby/standings (Unity's Boot swap also unlocks C#-side).
     if (document.pointerLockElement) document.exitPointerLock();
@@ -254,10 +347,12 @@ export const unityGame = {
     hideCountdown();
     hideHowTo();
     hidePlayerHud();
+    hideSpectatorHud();
     (window as any).__unityGameOver = null;
     (window as any).__unityMatchResult = null;
     (window as any).__unityNetSend = null;
     (window as any).__unityReady = null;
+    (window as any).__unityHexVanish = null;
     // Drop the gameplay scene back to the lightweight Boot scene so the next JOIN starts clean
     // (resets the hex arena / player) and a different mode can be selected.
     instance?.SendMessage("WebBridge", "LoadGameScene", "Boot");

@@ -15,6 +15,10 @@ import type {
   MatchMissedMsg,
   MatchAbortedMsg,
   ReadyUpdateMsg,
+  LobbyStatusMsg,
+  WatchStartMsg,
+  WatchEndMsg,
+  HexVanishMsg,
 } from "./netTypes";
 
 // WS address resolution:
@@ -39,6 +43,10 @@ interface Handlers {
   onMatchAborted?: (m: MatchAbortedMsg) => void; // match cancelled (<2 ready) — back to the queue
   onChatMsg?: (m: ChatMsg) => void; // a lobby chat line from another player
   onStandings?: (m: StandingsMsg) => void;
+  onLobbyStatus?: (m: LobbyStatusMsg) => void; // live server-browser state for the lobby cards
+  onWatchStart?: (m: WatchStartMsg) => void; // we're now spectating this match
+  onWatchEnd?: (m: WatchEndMsg) => void; // spectated match over — back to lobby
+  onHexVanish?: (m: HexVanishMsg) => void; // LMS tiles vanished in the watched match
   onError?: (m: ErrorMsg) => void;
   onConnChange?: (connected: boolean) => void;
 }
@@ -190,6 +198,19 @@ function dispatch(msg: ServerMsg) {
     case "standings":
       handlers.onStandings?.(msg);
       break;
+    case "lobbyStatus":
+      handlers.onLobbyStatus?.(msg);
+      break;
+    case "watchStart":
+      queuedMode = null; // spectating now — a reconnect must not silently re-queue us
+      handlers.onWatchStart?.(msg);
+      break;
+    case "watchEnd":
+      handlers.onWatchEnd?.(msg);
+      break;
+    case "hexVanish":
+      handlers.onHexVanish?.(msg);
+      break;
     case "error":
       console.warn("net error:", msg.code, msg.message);
       handlers.onError?.(msg);
@@ -259,6 +280,23 @@ export const net = {
   leaveQueue() {
     queuedMode = null;
     send({ t: "leaveQueue" });
+  },
+
+  // Spectate the running match in a mode. Fresh clock sync first — the instant-GO
+  // conversion (goAtEpochMs → local) needs a current offset.
+  watchMatch(mode: GameMode) {
+    queuedMode = null;
+    send({ t: "watchMatch", mode });
+    runTimeSync();
+  },
+
+  stopWatching() {
+    send({ t: "stopWatching" });
+  },
+
+  // My LOCAL bean stepped an LMS hex — feed the server's watcher hex-state sync.
+  sendHexVanish(idx: number) {
+    send({ t: "hexVanish", idx });
   },
 
   reportResult(mode: GameMode, survivalMs: number, finished: boolean) {

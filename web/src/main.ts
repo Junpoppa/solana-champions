@@ -14,12 +14,14 @@ import { Standings } from "./ui/standings";
 import { net } from "./net";
 import { loadProfile } from "./profile";
 import { setPlayerHudRoster } from "./ui/playerHud";
+import { removeSpectatorPlayers } from "./ui/spectator";
 import { setHowToStatus } from "./ui/howto";
+import type { WatchStartMsg } from "./netTypes";
 
 // HYBRID app: JS shell (identity + start menu + lobby + customizer, with a Three.js bean preview) wraps
 // the real Unity WebGL game. Multiplayer v1: JOIN enters a per-mode waitlist on the server; when the
 // room starts, the Unity build launches; on match end results are reported and standings shown.
-type AppState = "identity" | "startmenu" | "lobby" | "unity";
+type AppState = "identity" | "startmenu" | "lobby" | "unity" | "spectate";
 
 interface MatchCtx { seed: number; startAtEpochMs: number; matchId: string; myId: string | null; matchInfoJson: string; }
 
@@ -122,6 +124,12 @@ async function main() {
   const lobby = new Lobby({
     onClothing: () => clothingUI?.show(),
     onJoin: (mode) => enterQueue(mode),
+    onWatch: (mode) => {
+      // Watching replaces any queue intent (server auto-leaves too; mirror it client-side).
+      net.leaveQueue();
+      waitlist.hide();
+      net.watchMatch(mode);
+    },
     onSettings: () => settingsUI.show(),
     onChat: (text) => net.sendChat(text),
   });
@@ -142,6 +150,7 @@ async function main() {
   let myId: string | null = null;
   let currentMode: GameMode = "spinner";
   let matchCtx: MatchCtx | null = null;
+  let spectateCtx: WatchStartMsg | null = null; // set on watchStart, drives the spectate launch
   let standingsShown = false; // guards the finish/standings ordering race
   let matchRoster: { id: string; nick: string }[] = []; // current match roster (shrinks on playersDropped)
 
@@ -171,8 +180,12 @@ async function main() {
     },
     // Some players never loaded and were dropped from the match: despawn their avatars + shrink the HUD.
     onPlayersDropped: (m) => {
-      matchRoster = matchRoster.filter((r) => !m.ids.includes(r.id));
-      setPlayerHudRoster(matchRoster, myId);
+      if (appState === "spectate") {
+        removeSpectatorPlayers(m.ids);
+      } else {
+        matchRoster = matchRoster.filter((r) => !m.ids.includes(r.id));
+        setPlayerHudRoster(matchRoster, myId);
+      }
       unityGame.pushPlayersDropped(JSON.stringify({ ids: m.ids }));
     },
     // WE missed the start (tab hidden during load): server dropped + re-queued us. Leave the game
@@ -197,11 +210,31 @@ async function main() {
     // Standings always win: the server may end the match (grace/timeout) before our local bean falls,
     // so tear down Unity if it's still up and show the results.
     onStandings: (m) => {
+      if (appState === "spectate") return; // watchers never get standings (defensive)
       standingsShown = true;
       unityGame.hide();
       if (appState !== "lobby") setState("lobby");
       standings.show(m, myId);
     },
+    // Live server-browser state → lobby mode cards (players X/15, watch availability).
+    onLobbyStatus: (m) => { lobby.updateStatus(m.modes); },
+    // We're in as a spectator — launch the game shell in watch mode.
+    onWatchStart: (m) => {
+      spectateCtx = m;
+      currentMode = m.mode;
+      setState("spectate", m.mode);
+    },
+    // The watched match ended (or was aborted) — straight back to the lobby, no standings.
+    onWatchEnd: () => { if (appState === "spectate") exitSpectate(false); },
+    // LMS tiles vanished in the watched match — keep our world state in sync.
+    onHexVanish: (m) => { if (appState === "spectate") unityGame.pushHexVanish(JSON.stringify(m)); },
+    // Watch denials → a transient note on that mode's card (next lobbyStatus refreshes it).
+    onError: (m) => {
+      if (m.code === "watchfull") lobby.flashStatus(currentMode, "Watch slots are full — try again soon");
+      else if (m.code === "notrunning") lobby.flashStatus(currentMode, "No live match to watch right now");
+    },
+    // Connection dropped while spectating: the server already freed our seat — exit cleanly.
+    onConnChange: (up) => { if (!up && appState === "spectate") exitSpectate(false); },
   });
   net.connect();
 
@@ -220,6 +253,14 @@ async function main() {
     waitlist.show(mode);
   }
 
+  // Leave spectating (Exit button = tell the server; watchEnd/disconnect = seat already gone).
+  function exitSpectate(userInitiated: boolean) {
+    if (userInitiated) net.stopWatching();
+    spectateCtx = null;
+    unityGame.hide();
+    setState("lobby");
+  }
+
   // Local match ended (fall/elimination in Unity, or manual "← Menu" forfeit). Report to the
   // server, tear down Unity, and wait for standings.
   function finishMatch(survivalMs: number, finished: boolean) {
@@ -234,7 +275,7 @@ async function main() {
 
   function setState(s: AppState, mode: GameMode = "spinner") {
     appState = s;
-    const inUnity = s === "unity";
+    const inUnity = s === "unity" || s === "spectate";
     canvas.style.display = inUnity ? "none" : "block"; // Three only renders the menu/lobby preview
     pedestal.visible = s === "lobby";
     beanRoot.visible = !inUnity;
@@ -249,6 +290,33 @@ async function main() {
       customizing = false; clothingUI?.hide();
       yaw = 0; pitch = 0.12; dist = 3.0; bean?.setPaused(false);
       musicController.startLobby(); // the click that entered the lobby is the audio-unlocking gesture
+    } else if (s === "spectate") {
+      // watch a live match — same Unity shell, spectator config, DOM overlay controls.
+      startMenu.hide(); lobby.hide(); clothingUI?.hide(); settingsUI.hide(); waitlist.hide();
+      musicController.stop();
+      if (spectateCtx) {
+        const m = spectateCtx;
+        const matchInfoJson = JSON.stringify({
+          seed: m.seed, startAtEpochMs: m.startAtEpochMs, matchId: m.matchId,
+          myId, // our id is NOT in the roster → every entry renders as a remote bean
+          roster: m.roster,
+          vanishedHexes: m.vanishedHexes,
+        });
+        unityGame
+          .launchSpectate(
+            m.mode,
+            {
+              seed: m.seed,
+              startAtEpochMs: m.startAtEpochMs,
+              goAtEpochMs: m.goAtEpochMs,
+              matchId: m.matchId,
+              matchInfoJson,
+              roster: m.roster.map((r) => ({ id: r.id, nick: r.nick })),
+            },
+            () => exitSpectate(true),
+          )
+          .catch((e) => console.error("Spectate launch failed:", e));
+      }
     } else {
       // unity gameplay — load on matchStart, swap to the chosen mode's scene with the shared match config.
       // Stop the lobby music the moment the game loads; the in-game track starts on the countdown's first tick.
@@ -275,7 +343,7 @@ async function main() {
   function frame() {
     requestAnimationFrame(frame);
     const dt = Math.min(clock.getDelta(), 0.1);
-    if (appState === "unity") return; // Unity renders its own canvas
+    if (appState === "unity" || appState === "spectate") return; // Unity renders its own canvas
 
     if (appState === "lobby") {
       const r = dt * 1.8;

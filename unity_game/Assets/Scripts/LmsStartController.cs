@@ -23,6 +23,9 @@ public class LmsStartController : MonoBehaviour
 
     void Start()
     {
+        // Spectator joins MID-match: no drop-in sequence, no start hexes (they vanished at GO long
+        // ago), no bean to park. Arena state comes from the server's hex backlog (NetBridge/HexNet).
+        if (WebBridge.Spectator) return;
         var arena = GameObject.Find(arenaName);
         Transform topLayer = arena ? arena.transform.Find(topLayerName) : null;
         if (topLayer == null || topLayer.childCount == 0)

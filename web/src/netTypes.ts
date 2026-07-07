@@ -18,6 +18,7 @@ export interface MatchRosterEntry {
 export interface Pose {
   x: number; y: number; z: number; r: number; s: number; a: number; d: number;
   j: number; fx: number; fy: number; fz: number; // second-jump flag + fling velocity (for remote ragdoll)
+  cy: number; cp: number; // camera yaw/pitch — spectator player-view replication
 }
 
 export interface StandingRow {
@@ -44,7 +45,10 @@ export type ClientMsg =
   | { t: "state"; q: Pose }
   | { t: "ready" }
   | { t: "chat"; text: string }
-  | { t: "timeSync"; t0: number }; // clock-sync probe; t0 = client Date.now() at send
+  | { t: "timeSync"; t0: number } // clock-sync probe; t0 = client Date.now() at send
+  | { t: "watchMatch"; mode: GameMode } // spectate the running match in this mode
+  | { t: "stopWatching" }
+  | { t: "hexVanish"; idx: number }; // my LOCAL bean stepped LMS hex tile idx
 
 // ---- Server -> Client ----
 export interface IdentifiedMsg { t: "identified"; id: string; nick: string }
@@ -61,7 +65,22 @@ export interface ChatMsg { t: "chatMsg"; id: string; nick: string; text: string;
 export interface StandingsMsg { t: "standings"; mode: GameMode; matchId: string; ranked: StandingRow[]; winner: WinnerInfo | null }
 export interface ErrorMsg { t: "error"; code: string; message: string }
 
+// Per-mode live status for the lobby server-browser cards.
+export interface ModeStatus {
+  mode: GameMode;
+  phase: "filling" | "starting" | "running" | "finished";
+  count: number; // queued while filling, match roster size while starting/running
+  capacity: number;
+  watchers: number;
+  watchCap: number;
+  watchable: boolean; // running, past GO, and a watcher slot is free
+}
+export interface LobbyStatusMsg { t: "lobbyStatus"; modes: ModeStatus[] }
+export interface WatchStartMsg { t: "watchStart"; mode: GameMode; matchId: string; seed: number; startAtEpochMs: number; goAtEpochMs: number; roster: MatchRosterEntry[]; vanishedHexes: number[] }
+export interface WatchEndMsg { t: "watchEnd"; mode: GameMode; reason: "finished" | "aborted" }
+export interface HexVanishMsg { t: "hexVanish"; idxs: number[] } // relay to watchers
+
 export type ServerMsg =
   | IdentifiedMsg | QueueUpdateMsg | MatchStartMsg | SnapshotMsg | BeginCountdownMsg
   | TimeSyncPongMsg | ReadyUpdateMsg | PlayersDroppedMsg | MatchMissedMsg | MatchAbortedMsg
-  | ChatMsg | StandingsMsg | ErrorMsg;
+  | ChatMsg | StandingsMsg | LobbyStatusMsg | WatchStartMsg | WatchEndMsg | HexVanishMsg | ErrorMsg;

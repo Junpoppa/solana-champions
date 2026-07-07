@@ -32,6 +32,8 @@ export interface Pose {
   fx: number; // fling velocity x (world)
   fy: number; // fling velocity y
   fz: number; // fling velocity z
+  cy: number; // camera yaw (CameraManager.lookAngle) — spectator player-view replication
+  cp: number; // camera pitch (CameraManager.tiltAngle)
 }
 
 export type ResultReason = "died" | "finished" | "timeout" | "disconnect" | "winner";
@@ -55,7 +57,10 @@ export type ClientMsg =
   | { t: "state"; q: Pose } // live pose while in a match
   | { t: "ready" } // gameplay scene loaded; waiting for the synchronized countdown start
   | { t: "chat"; text: string } // lobby text chat (broadcast to other lobby players)
-  | { t: "timeSync"; t0: number }; // clock-sync probe; t0 = client Date.now() at send
+  | { t: "timeSync"; t0: number } // clock-sync probe; t0 = client Date.now() at send
+  | { t: "watchMatch"; mode: GameMode } // spectate the running match in this mode
+  | { t: "stopWatching" } // leave spectating (back to lobby)
+  | { t: "hexVanish"; idx: number }; // my LOCAL bean stepped LMS hex tile idx (spectator hex sync)
 
 // ---- Server -> Client ----
 export interface StandingRow {
@@ -72,6 +77,17 @@ export interface WinnerInfo {
   solAddress: string | null;
 }
 
+// Per-mode live status for the lobby server-browser cards.
+export interface ModeStatus {
+  mode: GameMode;
+  phase: RoomPhase;
+  count: number; // queued while filling, match roster size while starting/running
+  capacity: number;
+  watchers: number;
+  watchCap: number;
+  watchable: boolean; // running, past GO, and a watcher slot is free
+}
+
 export type ServerMsg =
   | { t: "identified"; id: string; nick: string }
   | { t: "queueUpdate"; mode: GameMode; count: number; capacity: number; minToStart: number; msRemaining: number; roster: RosterEntry[] }
@@ -85,4 +101,8 @@ export type ServerMsg =
   | { t: "chatMsg"; id: string; nick: string; text: string; ts: number } // a lobby chat line (server-stamped nick/id)
   | { t: "snapshot"; players: { id: string; q: Pose }[] } // ~15 Hz live poses of all players in the match
   | { t: "standings"; mode: GameMode; matchId: string; ranked: StandingRow[]; winner: WinnerInfo | null }
+  | { t: "lobbyStatus"; modes: ModeStatus[] } // live server-browser state for the lobby cards
+  | { t: "watchStart"; mode: GameMode; matchId: string; seed: number; startAtEpochMs: number; goAtEpochMs: number; roster: MatchRosterEntry[]; vanishedHexes: number[] } // you're now spectating
+  | { t: "watchEnd"; mode: GameMode; reason: "finished" | "aborted" } // spectated match over — back to lobby
+  | { t: "hexVanish"; idxs: number[] } // relay to watchers: these LMS tiles vanished
   | { t: "error"; code: string; message: string };

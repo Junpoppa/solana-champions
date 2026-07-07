@@ -23,12 +23,16 @@ public class WebBridge : MonoBehaviour
     // Sent by JS right after LoadGameScene; statics survive the scene swap and are read directly by the
     // mode controllers / kill zones (no per-scene re-apply needed).
     [System.Serializable]
-    private class MatchConfigData { public string mode; public bool multiplayer; public int seed; public double startAtEpochMs; public string matchId; }
+    private class MatchConfigData { public string mode; public bool multiplayer; public bool spectator; public int seed; public double startAtEpochMs; public string matchId; }
     private static bool s_multiplayer = false;
+    private static bool s_spectator = false;
     private static int s_seed = 0;
     private static string s_mode = null;
     private static string s_matchId = null;
     public static bool Multiplayer => s_multiplayer;
+    // Watching a live match: no local player bean — NetBridge renders the whole roster as remotes
+    // and drives a free SpectatorCamera; the countdown/ready/report paths are all skipped.
+    public static bool Spectator => s_spectator;
     public static int Seed => s_seed;
     public static string Mode => s_mode;
     public static string MatchId => s_matchId;
@@ -158,6 +162,7 @@ public class WebBridge : MonoBehaviour
             if (d != null)
             {
                 s_multiplayer = d.multiplayer;
+                s_spectator = d.spectator; // absent in player configs → JsonUtility default false
                 s_seed = d.seed;
                 s_mode = d.mode;
                 s_matchId = d.matchId;
@@ -223,6 +228,8 @@ public class WebBridge : MonoBehaviour
 
     void TryApplyLook()
     {
+        // Spectator has no local bean — stop the per-frame retry (remotes get their looks via NetBridge).
+        if (s_spectator) { lookApplied = true; return; }
         var cc = Object.FindObjectOfType<CharacterControls>();
         if (cc == null) return; // player not spawned yet; retry next frame
 

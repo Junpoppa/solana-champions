@@ -19,6 +19,7 @@ export const config = {
   // every fresh player (s31 live-test failure). 90s only drops genuinely stalled clients
   // (hidden tabs, dead connections). Keep IntroCountdown.cs's local fallback ABOVE this value.
   BEGIN_TIMEOUT_MS: num("BEGIN_TIMEOUT_MS", 90_000),
+  WATCH_CAP: num("WATCH_CAP", 5), // max live spectators per room
   ALLOWED_ORIGIN: process.env.ALLOWED_ORIGIN || "", // empty = allow any (dev)
 };
 

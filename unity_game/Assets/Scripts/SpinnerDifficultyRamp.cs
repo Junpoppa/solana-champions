@@ -111,8 +111,20 @@ public class SpinnerDifficultyRamp : MonoBehaviour
 
     IEnumerator Run()
     {
+        // Spectator catch-up: a watcher joins MID-match, but their local OnGo just fired. Replay the
+        // deterministic timeline (speed compounding + reversal cycle) silently up to "now" so the
+        // beams match what the players see, then continue live from the fractional remainder.
+        double elapsed = 0.0;
+        if (WebBridge.Spectator && WebBridge.PendingGoAtMs > 0.0)
+            elapsed = System.Math.Max(0.0, (System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - WebBridge.PendingGoAtMs) / 1000.0);
+
         // grace: bean is unfrozen at GO; hold the beams static a moment so it isn't swept instantly
-        if (beamStartDelay > 0f) yield return new WaitForSeconds(beamStartDelay);
+        if (elapsed < beamStartDelay)
+        {
+            yield return new WaitForSeconds(beamStartDelay - (float)elapsed);
+            elapsed = 0.0;
+        }
+        else elapsed -= beamStartDelay;
         if (greenBeam != null) greenBeam.enabled = true;
         if (bigBeam != null) bigBeam.enabled = true;
 
@@ -121,37 +133,47 @@ public class SpinnerDifficultyRamp : MonoBehaviour
         float greenCap = greenBaseSpeed * speedCapMult;
         float bigCap = bigBaseSpeed * speedCapMult;
         int reverseStartBeat = Mathf.Max(1, Mathf.CeilToInt(reverseStartSeconds / beatInterval)); // reversals start here
+
+        // fast-forward whole beats (spectator only; elapsed is 0 for players) — no flashes/toasts
+        int ffBeats = (int)(elapsed / beatInterval);
+        for (int i = 0; i < ffBeats; i++)
+        {
+            beat++;
+            ApplyBeat(beat, ref syncDir, greenCap, bigCap, reverseStartBeat);
+        }
+        float nextWait = beatInterval - (float)(elapsed - ffBeats * (double)beatInterval);
+
         while (true)
         {
-            yield return new WaitForSeconds(beatInterval);
+            yield return new WaitForSeconds(nextWait);
+            nextWait = beatInterval;
             beat++;
+            string dirLabel = ApplyBeat(beat, ref syncDir, greenCap, bigCap, reverseStartBeat);
 
-            // 1) speed BOTH beams up (capped)
-            if (greenBeam != null) greenBeam.degreesPerSecond = Mathf.Min(greenBeam.degreesPerSecond * (1f + speedPct), greenCap);
-            if (bigBeam != null)   bigBeam.degreesPerSecond   = Mathf.Min(bigBeam.degreesPerSecond   * (1f + speedPct), bigCap);
-
-            // 2) direction events — HELD BACK until reverseStartSeconds so the opening (speed-only) is survivable.
-            //    From the gate on: GREEN flip → BOTH flip → PURPLE flip → SAME-WAY sync.
-            string dirLabel;
-            if (beat < reverseStartBeat)
-            {
-                dirLabel = "FASTER";
-            }
-            else
-            {
-                int f = (beat - reverseStartBeat) % 4;
-                if (f == 0)      { if (greenBeam != null) greenBeam.spinSign *= -1f; dirLabel = "GREEN REVERSE"; }
-                else if (f == 1) { if (greenBeam != null) greenBeam.spinSign *= -1f; if (bigBeam != null) bigBeam.spinSign *= -1f; dirLabel = "BOTH REVERSE"; }
-                else if (f == 2) { if (bigBeam != null) bigBeam.spinSign *= -1f; dirLabel = "PURPLE REVERSE"; }
-                else             { syncDir *= -1; if (greenBeam != null) greenBeam.spinSign = syncDir; if (bigBeam != null) bigBeam.spinSign = syncDir; dirLabel = "SAME WAY ⇉"; }
-            }
-
-            // 3) feedback: flash both beams + toast with the live speed multiplier
+            // feedback: flash both beams + toast with the live speed multiplier
             FlashBeam(greenBeam, new Color(0.55f, 1f, 0.8f));
             FlashBeam(bigBeam, new Color(0.8f, 0.5f, 1f));
             float mult = (greenBaseSpeed > 0f && greenBeam != null) ? greenBeam.degreesPerSecond / greenBaseSpeed : 1f;
             GameToast(dirLabel + "  ·  spd ×" + mult.ToString("0.0"));
         }
+    }
+
+    // One deterministic timeline beat: speed BOTH beams up (capped) + the direction event. Shared by
+    // the live loop and the spectator fast-forward so both walk the exact same escalation.
+    string ApplyBeat(int beat, ref int syncDir, float greenCap, float bigCap, int reverseStartBeat)
+    {
+        // 1) speed BOTH beams up (capped)
+        if (greenBeam != null) greenBeam.degreesPerSecond = Mathf.Min(greenBeam.degreesPerSecond * (1f + speedPct), greenCap);
+        if (bigBeam != null)   bigBeam.degreesPerSecond   = Mathf.Min(bigBeam.degreesPerSecond   * (1f + speedPct), bigCap);
+
+        // 2) direction events — HELD BACK until reverseStartSeconds so the opening (speed-only) is survivable.
+        //    From the gate on: GREEN flip → BOTH flip → PURPLE flip → SAME-WAY sync.
+        if (beat < reverseStartBeat) return "FASTER";
+        int f = (beat - reverseStartBeat) % 4;
+        if (f == 0)      { if (greenBeam != null) greenBeam.spinSign *= -1f; return "GREEN REVERSE"; }
+        else if (f == 1) { if (greenBeam != null) greenBeam.spinSign *= -1f; if (bigBeam != null) bigBeam.spinSign *= -1f; return "BOTH REVERSE"; }
+        else if (f == 2) { if (bigBeam != null) bigBeam.spinSign *= -1f; return "PURPLE REVERSE"; }
+        else             { syncDir *= -1; if (greenBeam != null) greenBeam.spinSign = syncDir; if (bigBeam != null) bigBeam.spinSign = syncDir; return "SAME WAY ⇉"; }
     }
 
     // --- beam color-flash (per-renderer MaterialPropertyBlock pop, no shared-mat mutation) ---

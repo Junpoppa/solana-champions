@@ -15,6 +15,7 @@ export class Player {
 
   // per-room / per-match state
   roomMode: GameMode | null = null;
+  watchingMode: GameMode | null = null; // spectating this mode's running match (mutually exclusive with roomMode)
   matchId: string | null = null;
   result: MatchResult | null = null;
   spawnIndex = 0; // assigned at match start

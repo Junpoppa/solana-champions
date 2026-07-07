@@ -14,6 +14,10 @@ export class Room {
   phase: RoomPhase = "filling";
   players: Player[] = []; // active batch
   pending: Player[] = []; // waiting for next batch
+  watchers: Player[] = []; // live spectators — never in players, never in ready/standings paths
+  // Called after any membership/phase/watcher change so the lobby server-browser can update.
+  onStatusChange: (() => void) | null = null;
+  private vanishedHexes = new Set<number>(); // LMS tiles gone this match (late-watcher sync)
 
   matchId = "";
   seed = 0;
@@ -33,6 +37,15 @@ export class Room {
   constructor(mode: GameMode) {
     this.mode = mode;
     this.rules = MODE_RULES[mode];
+  }
+
+  // A match is watchable once it's actually underway (past GO) and a slot is free.
+  get watchable(): boolean {
+    return this.phase === "running" && this.beginFired && this.watchers.length < config.WATCH_CAP;
+  }
+
+  private notifyStatus(): void {
+    this.onStatusChange?.();
   }
 
   // ---- membership ------------------------------------------------------------
@@ -56,6 +69,7 @@ export class Room {
       if (!this.pending.includes(p)) this.pending.push(p);
       this.sendPendingUpdate(p);
     }
+    this.notifyStatus();
   }
 
   leave(p: Player): void {
@@ -67,12 +81,70 @@ export class Room {
         // the match starts with whoever is left (see onFillExpire). Empty queue = full reset.
         if (this.players.length === 0) this.clearFillTimers();
         else this.broadcastQueue();
+        this.notifyStatus();
       }
       // during starting/running a "leave" is ignored (client already in-match)
       return;
     }
     const j = this.pending.indexOf(p);
     if (j >= 0) this.pending.splice(j, 1);
+  }
+
+  // ---- spectators --------------------------------------------------------------
+
+  addWatcher(p: Player): void {
+    if (this.watchers.includes(p)) return;
+    if (!(this.phase === "running" && this.beginFired)) {
+      p.send({ t: "error", code: "notrunning", message: "no live match to watch in this mode" });
+      return;
+    }
+    if (this.watchers.length >= config.WATCH_CAP) {
+      p.send({ t: "error", code: "watchfull", message: "all watcher slots are taken" });
+      return;
+    }
+    this.watchers.push(p);
+    p.watchingMode = this.mode;
+    // Roster from the CURRENT players (not-ready stragglers were already dropped at fireBegin).
+    const roster: MatchRosterEntry[] = this.players.map((q) => ({
+      id: q.id,
+      nick: q.nick,
+      look: q.look,
+      spawnIndex: q.spawnIndex,
+    }));
+    p.send({
+      t: "watchStart",
+      mode: this.mode,
+      matchId: this.matchId,
+      seed: this.seed,
+      startAtEpochMs: this.startAtEpochMs,
+      goAtEpochMs: this.goAtEpochMs,
+      roster,
+      vanishedHexes: [...this.vanishedHexes],
+    });
+    log(`[${this.mode}] watcher +${p.id} (${this.watchers.length}/${config.WATCH_CAP})`);
+    this.notifyStatus();
+  }
+
+  removeWatcher(p: Player): void {
+    const i = this.watchers.indexOf(p);
+    if (i < 0) return;
+    this.watchers.splice(i, 1);
+    p.watchingMode = null;
+    log(`[${this.mode}] watcher -${p.id} (${this.watchers.length}/${config.WATCH_CAP})`);
+    this.notifyStatus();
+  }
+
+  // A player's LOCAL bean stepped an LMS hex — record it (dedup) and relay to watchers so
+  // their world state tracks the match. Late joiners get the whole set in watchStart.
+  reportHexVanish(p: Player, idx: number): void {
+    if (this.mode !== "lastman") return;
+    if (this.phase !== "running") return;
+    if (!this.players.includes(p)) return;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= 4096) return;
+    if (this.vanishedHexes.has(idx)) return;
+    this.vanishedHexes.add(idx);
+    const msg: ServerMsg = { t: "hexVanish", idxs: [idx] };
+    for (const w of this.watchers) if (w.connected) w.send(msg);
   }
 
   disconnect(p: Player): void {
@@ -157,6 +229,7 @@ export class Room {
     const msg: ServerMsg = { t: "beginCountdown", goAtEpochMs: this.goAtEpochMs };
     for (const p of this.players) if (p.connected) p.send(msg);
     log(`[${this.mode}] match ${this.matchId} BEGIN (${this.players.length} ready) goAt=${this.goAtEpochMs}`);
+    this.notifyStatus(); // match becomes watchable at GO
   }
 
   // Not enough ready players at begin time: cancel the match, put the remainder at the
@@ -164,6 +237,7 @@ export class Room {
   private abortMatch(): void {
     log(`[${this.mode}] match ${this.matchId} ABORTED (${this.players.length} ready)`);
     this.clearMatchTimers();
+    this.dismissWatchers("aborted");
     const remainder = this.players;
     this.players = [];
     this.phase = "filling";
@@ -238,6 +312,7 @@ export class Room {
     this.matchTimer = setTimeout(() => this.endMatch(), config.START_DELAY_MS + config.MATCH_WATCHDOG_MS);
     this.snapTimer = setInterval(() => this.broadcastSnapshot(), config.SNAPSHOT_MS);
     log(`[${this.mode}] match ${this.matchId} START; ${this.players.length} players seed=${this.seed}`);
+    this.notifyStatus();
   }
 
   private maybeEnd(): void {
@@ -295,6 +370,7 @@ export class Room {
       ? { id: winnerPlayer.id, nick: winnerPlayer.nick, solAddress: winnerPlayer.solAddress }
       : null;
 
+    this.dismissWatchers("finished"); // watchers go straight back to lobby — no standings
     const msg: ServerMsg = { t: "standings", mode: this.mode, matchId: this.matchId, ranked, winner };
     for (const p of this.players) p.send(msg);
     log(
@@ -308,6 +384,7 @@ export class Room {
   private reset(): void {
     this.clearFillTimers();
     this.clearMatchTimers();
+    this.dismissWatchers("finished"); // no-op if endMatch/abortMatch already sent watchEnd
     for (const p of this.players) {
       p.roomMode = null;
       p.matchId = null;
@@ -316,7 +393,20 @@ export class Room {
     this.players = [];
     this.phase = "filling";
     this.goAtEpochMs = 0;
+    this.vanishedHexes.clear();
     this.promotePending();
+    this.notifyStatus();
+  }
+
+  // Send watchEnd + detach every watcher. Idempotent (watchers list empties on first call).
+  private dismissWatchers(reason: "finished" | "aborted"): void {
+    if (!this.watchers.length) return;
+    for (const w of this.watchers) {
+      w.watchingMode = null;
+      if (w.connected) w.send({ t: "watchEnd", mode: this.mode, reason });
+    }
+    this.watchers = [];
+    this.notifyStatus();
   }
 
   // Promote pending players into the (empty) forming batch. Shared by reset() and abortMatch().
@@ -404,6 +494,7 @@ export class Room {
     if (poses.length === 0) return;
     const msg: ServerMsg = { t: "snapshot", players: poses };
     for (const p of this.players) if (p.connected) p.send(msg);
+    for (const w of this.watchers) if (w.connected) w.send(msg);
   }
 
   // ---- broadcasts ------------------------------------------------------------

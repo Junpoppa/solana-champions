@@ -42,6 +42,23 @@ mergeInto(LibraryManager.library, {
     }
   },
 
+  // Called from SpectatorCamera.cs on every mode/focus change: {"mode":"player|free","id":"<playerId>"}.
+  // Drives the spectate overlay's roster highlight, FREE CAM button state and hint text.
+  SpectateState: function (ptr) {
+    var s = UTF8ToString(ptr);
+    if (typeof window !== 'undefined' && typeof window.__unitySpectateState === 'function') {
+      try { window.__unitySpectateState(JSON.parse(s)); } catch (e) { console.error('SpectateState parse', e); }
+    }
+  },
+
+  // Called from HexNet.cs when the LOCAL bean steps an LMS hex tile. The JS shell reports the tile
+  // index to the server so spectators (incl. late joiners) see the same holes in the arena.
+  HexVanish: function (idx) {
+    if (typeof window !== 'undefined' && typeof window.__unityHexVanish === 'function') {
+      window.__unityHexVanish(idx | 0);
+    }
+  },
+
   // Called from SpinnerDifficultyRamp.cs on each difficulty event ("BOTH REVERSE", "BIG BEAM ⚡", …).
   // Drives the small high-positioned toast (web/src/ui/countdown.ts) so escalation reads on screen.
   GameToast: function (ptr) {

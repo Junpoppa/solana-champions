@@ -14,6 +14,16 @@ import type { ClientMsg, ServerMsg, Pose } from "./types.js";
 const rm = new RoomManager();
 const players = new Set<Player>();
 
+// Live server-browser state → everyone sitting in the lobby (not mid-match, not spectating —
+// watchers already see the match itself; their cards refresh on return).
+function broadcastLobbyStatus(): void {
+  const msg: ServerMsg = { t: "lobbyStatus", modes: rm.status() };
+  for (const p of players) {
+    if (p.identified && !rm.isInActiveMatch(p) && !p.watchingMode) p.send(msg);
+  }
+}
+rm.onStatusChanged = broadcastLobbyStatus;
+
 // ---- static web hosting (serves the built web/ so one origin/URL covers web + ws) ----
 const DIST = join(dirname(fileURLToPath(import.meta.url)), "../../web/dist");
 const haveWeb = existsSync(join(DIST, "index.html"));
@@ -151,7 +161,7 @@ function toPose(q: unknown): Pose | null {
   const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
   return {
     x: n(o.x), y: n(o.y), z: n(o.z), r: n(o.r), s: n(o.s), a: n(o.a), d: n(o.d),
-    j: n(o.j), fx: n(o.fx), fy: n(o.fy), fz: n(o.fz),
+    j: n(o.j), fx: n(o.fx), fy: n(o.fy), fz: n(o.fz), cy: n(o.cy), cp: n(o.cp),
   };
 }
 
@@ -163,6 +173,7 @@ function handle(player: Player, msg: ClientMsg): void {
       player.look = sanitizeLook(msg.look);
       player.identified = true;
       player.send({ t: "identified", id: player.id, nick: player.nick });
+      player.send({ t: "lobbyStatus", modes: rm.status() }); // fresh lobby sees live state immediately
       break;
     }
     case "updateLook": {
@@ -205,6 +216,26 @@ function handle(player: Player, msg: ClientMsg): void {
       rm.markReady(player);
       break;
     }
+    case "watchMatch": {
+      if (!player.identified) {
+        player.send({ t: "error", code: "notidentified", message: "identify before watching" });
+        break;
+      }
+      if (!isGameMode(msg.mode)) {
+        player.send({ t: "error", code: "badmode", message: "unknown game mode" });
+        break;
+      }
+      rm.watch(player, msg.mode);
+      break;
+    }
+    case "stopWatching": {
+      rm.stopWatching(player);
+      break;
+    }
+    case "hexVanish": {
+      rm.hexVanish(player, Number(msg.idx));
+      break;
+    }
     case "timeSync": {
       // Clock-sync probe: reply immediately with the server clock (works pre-identify).
       player.send({ t: "timeSyncPong", t0: Number(msg.t0) || 0, serverNow: Date.now() });
@@ -221,7 +252,8 @@ function handle(player: Player, msg: ClientMsg): void {
       // Deliver to everyone who isn't actively inside a match — lobby, waitlisted and pending
       // players included (the old roomMode===null gate silently killed chat for anyone queued,
       // i.e. for the whole group the moment they re-JOINed after a match).
-      for (const p of players) if (p.identified && !rm.isInActiveMatch(p)) p.send(out);
+      // (watchers excluded too — their lobby DOM is hidden behind the match view)
+      for (const p of players) if (p.identified && !rm.isInActiveMatch(p) && !p.watchingMode) p.send(out);
       break;
     }
     default: {

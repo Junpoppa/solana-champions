@@ -6,6 +6,7 @@
 // JOIN GAME / Settings / multiplayer / lobby-filling / Solana wallet = future to-dos (stubbed).
 
 import { musicController } from "./musicController";
+import type { ModeStatus } from "../netTypes";
 
 export type LobbyNav = "play" | "clothing" | "settings";
 // Playable game modes. Each maps to a Unity scene in unityGame.ts; Platform Race is a future teaser.
@@ -14,6 +15,7 @@ export type GameMode = "spinner" | "lastman" | "rollout";
 export interface LobbyHooks {
   onClothing: () => void; // open the customizer
   onJoin: (mode: GameMode) => void; // start a match in the chosen mode
+  onWatch: (mode: GameMode) => void; // spectate the running match in this mode
   onSettings: () => void; // open settings (stub for now)
   onChat: (text: string) => void; // send a lobby chat line
 }
@@ -49,6 +51,8 @@ export class Lobby {
   private navButtons: Partial<Record<LobbyNav, HTMLButtonElement>> = {};
   private modesEl!: HTMLDivElement;
   private logoEl!: HTMLImageElement;
+  // live server-browser refs per mode card (status line + watch button), updated from lobbyStatus
+  private modeCards = new Map<GameMode, { status: HTMLDivElement; watchBtn: HTMLButtonElement }>();
   private chatLog!: HTMLDivElement;
   private chatSeeded = false;
   playerName = "Player"; // overwritten from the saved profile via setPlayerName()
@@ -131,6 +135,22 @@ export class Lobby {
     #lobby .lb-card-join:hover{transform:scale(1.05);filter:brightness(1.1)}
     #lobby .lb-card-join:active{transform:translateY(3px);box-shadow:0 2px 0 #b01b6e,0 5px 10px rgba(0,0,0,.4)}
     #lobby .lb-mode-card.disabled{filter:grayscale(.7) brightness(.66);opacity:.85}
+    /* live server-browser status line + watch button */
+    #lobby .lb-mode-status{margin-top:6px;font:700 12px/1.2 system-ui,sans-serif;color:#8ef0d2;min-height:14px}
+    #lobby .lb-mode-status .lb-live-dot{display:inline-block;width:8px;height:8px;border-radius:50%;
+      background:#ff4b4b;margin-right:6px;vertical-align:1px;
+      animation:lbLivePulse 1.1s ease-in-out infinite}
+    @keyframes lbLivePulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.8)}}
+    #lobby .lb-btn-row{display:flex;gap:9px;margin-top:9px;align-items:center}
+    #lobby .lb-btn-row .lb-card-join{margin-top:0}
+    #lobby .lb-card-watch{border:0;border-radius:11px;cursor:pointer;color:#fff;
+      padding:0 16px;height:38px;font:800 13px/1 system-ui,sans-serif;letter-spacing:.03em;
+      background:${INACTIVE_BG};text-shadow:0 2px 4px rgba(0,0,0,.5);
+      box-shadow:0 5px 0 #0e8f8f,0 8px 14px rgba(0,0,0,.4);
+      transition:transform .12s ease,filter .12s ease}
+    #lobby .lb-card-watch:hover:not(:disabled){transform:scale(1.05);filter:brightness(1.1)}
+    #lobby .lb-card-watch:active:not(:disabled){transform:translateY(3px);box-shadow:0 2px 0 #0e8f8f,0 5px 10px rgba(0,0,0,.4)}
+    #lobby .lb-card-watch:disabled{cursor:default;filter:grayscale(.85) brightness(.6);opacity:.55;box-shadow:none}
     #lobby .lb-soon{margin-top:9px;align-self:flex-start;padding:0 16px;height:34px;border-radius:11px;
       display:flex;align-items:center;justify-content:center;
       font:800 12px/1 system-ui,sans-serif;letter-spacing:.07em;text-transform:uppercase;
@@ -246,12 +266,28 @@ export class Lobby {
       info.appendChild(title);
       info.appendChild(blurb);
       if (c.mode) {
+        const m = c.mode;
+        // live status line (filled from lobbyStatus broadcasts)
+        const status = document.createElement("div");
+        status.className = "lb-mode-status";
+        status.textContent = "";
+        info.appendChild(status);
+
+        const row = document.createElement("div");
+        row.className = "lb-btn-row";
         const jb = document.createElement("button");
         jb.className = "lb-card-join";
         jb.textContent = "JOIN";
-        const m = c.mode;
         jb.onclick = () => this.hooks.onJoin(m);
-        info.appendChild(jb);
+        const wb = document.createElement("button");
+        wb.className = "lb-card-watch";
+        wb.textContent = "WATCH LIVE";
+        wb.disabled = true;
+        wb.onclick = () => this.hooks.onWatch(m);
+        row.appendChild(jb);
+        row.appendChild(wb);
+        info.appendChild(row);
+        this.modeCards.set(m, { status, watchBtn: wb });
       } else {
         const soon = document.createElement("div");
         soon.className = "lb-soon";
@@ -329,6 +365,37 @@ export class Lobby {
     wrap.appendChild(log);
     wrap.appendChild(inputRow);
     return wrap;
+  }
+
+  // Live server-browser update — refresh each mode card's status line + Watch button.
+  updateStatus(modes: ModeStatus[]) {
+    for (const m of modes) {
+      const refs = this.modeCards.get(m.mode as GameMode);
+      if (!refs) continue;
+      refs.status.innerHTML = "";
+      if (m.phase === "starting" || m.phase === "running") {
+        const dot = document.createElement("span");
+        dot.className = "lb-live-dot";
+        refs.status.appendChild(dot);
+        refs.status.appendChild(
+          document.createTextNode(`LIVE — ${m.count} playing · ${m.watchers}/${m.watchCap} watching`),
+        );
+      } else if (m.phase === "finished") {
+        refs.status.textContent = "Match finishing…";
+      } else if (m.count > 0) {
+        refs.status.textContent = `Queue ${m.count}/${m.capacity}`;
+      } else {
+        refs.status.textContent = "No players queued";
+      }
+      refs.watchBtn.disabled = !m.watchable;
+    }
+  }
+
+  // Flash a short notice on a mode card's status line (e.g. watch slots full).
+  flashStatus(mode: GameMode, text: string) {
+    const refs = this.modeCards.get(mode);
+    if (!refs) return;
+    refs.status.textContent = text;
   }
 
   // Append an incoming chat line. `mine` highlights the local player's own messages. Injection-safe (textContent).

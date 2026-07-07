@@ -66,7 +66,9 @@ public class IntroCountdown : MonoBehaviour
                 BeginCountdownAt(WebBridge.PendingGoAtMs);
                 return;
             }
-            NetReady(); // → JS reports ready; server broadcasts beginCountdown → BeginCountdownAt()
+            // A spectator is NOT a match participant: never enter the ready handshake (their GO
+            // instant always arrives pre-seeded via PendingGoAtMs → instant catch-up above).
+            if (!WebBridge.Spectator) NetReady(); // → JS reports ready; server broadcasts beginCountdown
             // Safety net: if the synchronized begin never arrives, start locally so the match can NEVER
             // hard-freeze. MUST exceed the server's BEGIN_TIMEOUT_MS (90 s — covers first-visit downloads
             // of the ~34MB build), else loaded players false-start unsynced while the room still waits.
@@ -118,12 +120,12 @@ public class IntroCountdown : MonoBehaviour
                 if (digit != lastShownDigit)
                 {
                     lastShownDigit = digit;
-                    CountdownTick(digit.ToString());
+                    if (!WebBridge.Spectator) CountdownTick(digit.ToString()); // no countdown DOM while watching
                 }
             }
             else
             {
-                CountdownTick("GO");
+                if (!WebBridge.Spectator) CountdownTick("GO");
                 if (player != null) player.LockControl(false);
                 MatchClock.StartNow(); // survival timing starts at GO
                 HasFired = true;
@@ -133,7 +135,7 @@ public class IntroCountdown : MonoBehaviour
         else if (!cleared && remaining <= -goHold * 1000.0)
         {
             cleared = true;
-            CountdownTick(""); // clear the overlay
+            if (!WebBridge.Spectator) CountdownTick(""); // clear the overlay
             enabled = false;   // done — no more work for this component
         }
     }

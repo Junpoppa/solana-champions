@@ -32,6 +32,7 @@ public class HexTile : MonoBehaviour
         if (collision.gameObject.CompareTag("Player"))
         {
             triggered = true;
+            HexNet.ReportLocalStep(this); // solid collision = the LOCAL bean → sync watchers
             StartCoroutine(Vanish());
         }
     }
@@ -72,6 +73,25 @@ public class HexTile : MonoBehaviour
         var col = GetComponent<Collider>();
         if (col != null) col.enabled = false;
         rend.enabled = false;
+    }
+
+    /// <summary>
+    /// Vanish driven by the server's hex-state (spectators). Idempotent — a tile the local
+    /// simulation already vanished (remote trigger) is left alone. instant = late-join backlog:
+    /// kill collider+renderer with no animation so the arena matches the match state on entry.
+    /// </summary>
+    public void NetVanish(bool instant)
+    {
+        if (triggered) return;
+        triggered = true;
+        if (instant)
+        {
+            var col = GetComponent<Collider>();
+            if (col != null) col.enabled = false;
+            if (rend == null) rend = GetComponent<Renderer>();
+            rend.enabled = false;
+        }
+        else StartCoroutine(Vanish());
     }
 
     /// <summary>Restore the tile to its starting state (for a future arena reset).</summary>

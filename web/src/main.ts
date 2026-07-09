@@ -198,6 +198,17 @@ async function main() {
       }
       unityGame.pushPlayersDropped(JSON.stringify({ ids: m.ids }));
     },
+    // A player's tab froze mid-match (poses stopped): every still-awake client takes their bean
+    // over and simulates it as a normal idle player (falls through hexes / rolls off the log /
+    // gets beamed) instead of leaving a frozen statue. Forward to Unity in both play + spectate.
+    onPlayerStalled: (m) => {
+      if (appState === "unity" || appState === "spectate") unityGame.pushPlayerStalled(JSON.stringify({ ids: m.ids }));
+    },
+    // The owner started streaming again before the AFK cutoff — hand their bean back to the
+    // network stream (un-orphan it) so it follows their real pose again.
+    onPlayerResumed: (m) => {
+      if (appState === "unity" || appState === "spectate") unityGame.pushPlayerResumed(JSON.stringify({ ids: m.ids }));
+    },
     // WE missed the start (tab hidden during load): server dropped + re-queued us. Leave the game
     // shell and show the waitlist for the next match.
     onMatchMissed: (m) => {

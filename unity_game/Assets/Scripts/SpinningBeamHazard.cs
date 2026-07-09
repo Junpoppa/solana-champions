@@ -89,7 +89,15 @@ public class SpinningBeamHazard : MonoBehaviour
                 // GetComponentInParent so a ragdoll bone collider (also tagged Player while limp) resolves
                 // to the player's CharacterControls. Standing/jumping hits resolve via the root capsule as before.
                 CharacterControls cc = col.GetComponentInParent<CharacterControls>();
-                if (cc == null) continue;
+                if (cc == null)
+                {
+                    // Ownerless (frozen-tab) bean — no CharacterControls, but fling it like a real player.
+                    var ob = col.GetComponentInParent<OrphanBean>();
+                    if (ob == null) continue;
+                    ob.BeamHit(OrphanFlingVel(col.transform.position));
+                    cooldownTimer = cooldown;
+                    return;
+                }
                 // Closest point on the BAR to the bean = the strike point. Its HEIGHT tells the ragdoll whether
                 // this is an upper-beam (head) or lower-beam (legs) hit so it can tumble accordingly.
                 Vector3 hitPoint = cap.ClosestPoint(col.bounds.center);
@@ -115,6 +123,20 @@ public class SpinningBeamHazard : MonoBehaviour
             rag.EnableRagdoll(vel, ragdollStrength, hitPoint); // beam touch -> limp + tumble at the strike point
         else
             cc.HitPlayer(vel, stun); // fallback: original launch-knockback
+    }
+
+    // Same fling velocity Hit() applies, minus the ragdoll strength/hit-point (an orphan has no
+    // CharacterControls/RagdollController — NetBridge's RemoteRagdoll takes the raw velocity).
+    Vector3 OrphanFlingVel(Vector3 playerPos)
+    {
+        Vector3 pivotPos = transform.position;
+        Vector3 r = playerPos - pivotPos; r.y = 0f;
+        if (r.sqrMagnitude < 0.0001f) r = transform.right;
+        Vector3 outward = r.normalized;
+        Vector3 axis = transform.TransformDirection(localSpinAxis).normalized;
+        Vector3 tangential = Vector3.Cross(axis * spinSign, r); tangential.y = 0f;
+        tangential = tangential.sqrMagnitude > 0.0001f ? tangential.normalized : outward;
+        return tangential * tangentialSpeed + outward * outwardSpeed + Vector3.up * upSpeed;
     }
 
     // Standard CapsuleCollider -> world segment endpoints + scaled radius.

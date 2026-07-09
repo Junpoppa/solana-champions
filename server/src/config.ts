@@ -24,6 +24,12 @@ export const config = {
   // Unity WebGL pauses but the socket stays open — or a dead pipe) is eliminated with a
   // losing placement. Clients stream poses at ~15 Hz, so 4s of silence is unambiguous.
   POSE_STALE_MS: num("POSE_STALE_MS", 4_000),
+  // Orphan-takeover trigger: poses stopped for this long (< POSE_STALE_MS) → the owner's tab froze,
+  // so we tell every still-awake client to take over that bean and simulate it as a normal idle
+  // player (falls through hexes / rolls off the log / gets beamed) instead of a frozen statue.
+  // REVERSIBLE — if the owner streams again before the AFK cutoff, we send playerResumed. Shorter
+  // than POSE_STALE_MS so the bean starts falling promptly (an idle bean should drop ~on GO).
+  STALL_MS: num("STALL_MS", 2_000),
   ALLOWED_ORIGIN: process.env.ALLOWED_ORIGIN || "", // empty = allow any (dev)
 };
 

@@ -133,12 +133,19 @@ function ensureLoaded(): Promise<any> {
         companyName: "DefaultCompany",
         productName: "unity_game",
         productVersion: "0.1.0",
-        // Known-harmless Unity WebGL engine bug: its internal focus/blur handler throws
-        // "str.charCodeAt is not a function" on window blur (Windows key / tab-away / page nav)
-        // and pops a scary alert(). Swallow ONLY that one; everything else surfaces normally.
+        // Known-harmless Unity WebGL engine bugs that pop a scary alert():
+        //  1. its internal focus/blur handler throws "str.charCodeAt is not a function" on window
+        //     blur (Windows key / tab-away / page nav);
+        //  2. its internal Cursor.lockState=Locked call throws "NotAllowedError: A user gesture is
+        //     required to request Pointer Lock" when the scene loads in an unfocused/gestureless tab
+        //     (e.g. the player tab-switched during load). Harmless — the mousedown/keydown tryLock
+        //     listeners re-acquire the lock on the next click.
+        // Swallow ONLY these; everything else surfaces normally.
         errorHandler: (msg: any) => {
-          if (typeof msg === "string" && msg.includes("str.charCodeAt is not a function")) {
-            console.warn("[unity] suppressed known focus-handler engine bug:", msg);
+          if (typeof msg === "string" &&
+              (msg.includes("str.charCodeAt is not a function") ||
+               msg.includes("Pointer Lock") || msg.includes("user gesture is required"))) {
+            console.warn("[unity] suppressed known engine bug:", msg);
             return true;
           }
           return false;
@@ -331,6 +338,15 @@ export const unityGame = {
   pushPlayersDropped(idsJson: string) {
     instance?.SendMessage("NetBridge", "OnPlayersDropped", idsJson);
   },
+  // A player's tab froze mid-match — take their bean over locally and simulate it as an idle
+  // player (real physics: falls through hexes / rolls off the log / gets beamed).
+  pushPlayerStalled(idsJson: string) {
+    instance?.SendMessage("NetBridge", "OnPlayerStalled", idsJson);
+  },
+  // The owner is streaming again — hand their bean back to the network stream.
+  pushPlayerResumed(idsJson: string) {
+    instance?.SendMessage("NetBridge", "OnPlayerResumed", idsJson);
+  },
   // Watched match: LMS tiles vanished (server relay) — apply to our world state.
   pushHexVanish(json: string) {
     instance?.SendMessage("NetBridge", "OnHexVanish", json);
@@ -340,6 +356,10 @@ export const unityGame = {
     spectating = false;
     specFreeCam = false;
     (window as any).__unitySpectateState = null;
+    // Guarantee keyboard focus leaves the Unity canvas so the lobby chat input receives keystrokes
+    // again. captureAllKeyboardInput=false (WebBridge) already stops window-level capture; this is
+    // belt-and-suspenders against a browser that keeps a just-hidden element "focused".
+    (document.getElementById("unity-canvas") as HTMLElement | null)?.blur();
     container?.classList.remove("show");
     // Give the OS cursor back for the DOM lobby/standings (Unity's Boot swap also unlocks C#-side).
     if (document.pointerLockElement) document.exitPointerLock();

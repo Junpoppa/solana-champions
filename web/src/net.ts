@@ -12,6 +12,8 @@ import type {
   ChatMsg,
   ErrorMsg,
   PlayersDroppedMsg,
+  PlayerStalledMsg,
+  PlayerResumedMsg,
   MatchMissedMsg,
   MatchAbortedMsg,
   ReadyUpdateMsg,
@@ -39,6 +41,8 @@ interface Handlers {
   onBeginCountdown?: (goAtEpochMs: number) => void; // GO fires at this server-clock instant, same for all players
   onReadyUpdate?: (m: ReadyUpdateMsg) => void; // loading progress while the room waits for all players
   onPlayersDropped?: (m: PlayersDroppedMsg) => void; // players who missed the start — despawn their avatars
+  onPlayerStalled?: (m: PlayerStalledMsg) => void; // owners' tabs froze — take their beans over locally
+  onPlayerResumed?: (m: PlayerResumedMsg) => void; // owners streamed again — hand their beans back
   onMatchMissed?: (m: MatchMissedMsg) => void; // we missed the start; server re-queued us
   onMatchAborted?: (m: MatchAbortedMsg) => void; // match cancelled (<2 ready) — back to the queue
   onChatMsg?: (m: ChatMsg) => void; // a lobby chat line from another player
@@ -183,6 +187,12 @@ function dispatch(msg: ServerMsg) {
       break;
     case "playersDropped":
       handlers.onPlayersDropped?.(msg);
+      break;
+    case "playerStalled":
+      handlers.onPlayerStalled?.(msg);
+      break;
+    case "playerResumed":
+      handlers.onPlayerResumed?.(msg);
       break;
     case "matchMissed":
       queuedMode = msg.mode; // server re-queued us — a reconnect should keep us in that line

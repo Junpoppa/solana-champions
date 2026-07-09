@@ -394,6 +394,7 @@ export class Room {
       p.roomMode = null;
       p.matchId = null;
       p.result = null;
+      p.stalled = false;
     }
     this.players = [];
     this.phase = "filling";
@@ -498,6 +499,46 @@ export class Room {
   private checkStalePlayers(): void {
     if (this.phase !== "running" || !this.beginFired || !this.goAtEpochMs) return;
     const now = Date.now();
+
+    // Stage 1 — STALL (visual takeover, reversible). A frozen tab stops streaming; after STALL_MS
+    // we tell every still-awake client to take that bean over and simulate it as a normal idle
+    // player (falls through hexes / rolls off the log / gets beamed) instead of leaving a frozen
+    // statue. Null its pose so we stop fanning the stale position (clients own it locally now); if
+    // the owner streams again before the AFK cutoff, setPose refreshes lastPoseAt and we hand it
+    // back via playerResumed.
+    const stallCutoff = now - config.STALL_MS;
+    if (this.goAtEpochMs <= stallCutoff) {
+      const stalled: string[] = [];
+      const resumed: string[] = [];
+      for (const p of this.players) {
+        if (p.result || !p.connected) continue;
+        const last = p.lastPoseAt ?? this.goAtEpochMs;
+        if (!p.stalled && last < stallCutoff) {
+          p.stalled = true;
+          p.pose = null; // stop fanning the frozen pose — the takeover drives the bean now
+          stalled.push(p.id);
+        } else if (p.stalled && last >= stallCutoff) {
+          p.stalled = false; // owner is back before the AFK cutoff — return the bean to the stream
+          resumed.push(p.id);
+        }
+      }
+      if (stalled.length) {
+        const msg: ServerMsg = { t: "playerStalled", mode: this.mode, ids: stalled };
+        for (const p of this.players) if (p.connected) p.send(msg);
+        for (const w of this.watchers) if (w.connected) w.send(msg);
+        log(`[${this.mode}] match ${this.matchId} stalled → takeover: ${stalled.join(", ")}`);
+      }
+      if (resumed.length) {
+        const msg: ServerMsg = { t: "playerResumed", mode: this.mode, ids: resumed };
+        for (const p of this.players) if (p.connected) p.send(msg);
+        for (const w of this.watchers) if (w.connected) w.send(msg);
+      }
+    }
+
+    // Stage 2 — AFK (hard elimination + standings authority). Unchanged: a player whose poses
+    // stopped for POSE_STALE_MS is out. Any such player was already stalled at STALL_MS, so their
+    // bean is already being simulated locally; playersDropped still tells THEM (on resume) they're
+    // out, and NetBridge leaves an in-progress takeover alone rather than popping it.
     const cutoff = now - config.POSE_STALE_MS;
     if (this.goAtEpochMs > cutoff) return; // give everyone POSE_STALE_MS after GO to stream
     const stale = this.players.filter(

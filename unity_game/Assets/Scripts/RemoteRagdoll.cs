@@ -84,6 +84,36 @@ public class RemoteRagdoll : MonoBehaviour
         if (anim != null) anim.enabled = true;
     }
 
+    /// Fastest-moving bone speed (m/s) — lets a caller detect when a ragdoll has come to rest.
+    public float MaxBoneSpeed()
+    {
+        if (!ragdolled || boneBodies == null) return 0f;
+        float max = 0f;
+        foreach (var b in boneBodies)
+        {
+            if (b == null || b.isKinematic) continue;
+            float s = b.linearVelocity.magnitude;
+            if (s > max) max = s;
+        }
+        return max;
+    }
+
+    /// World position of the hips (heaviest bone) — where the bean actually came to rest, so a get-up
+    /// can re-stand it there instead of snapping back to where it fell from.
+    public Vector3 HipsPosition()
+    {
+        Rigidbody hips = null; float bestMass = -1f;
+        if (boneBodies != null)
+            foreach (var b in boneBodies)
+            {
+                if (b == null) continue;
+                string n = b.name.ToLowerInvariant();
+                if (n.Contains("hip") || n.Contains("pelvis")) return b.position;
+                if (b.mass > bestMass) { bestMass = b.mass; hips = b; }
+            }
+        return hips != null ? hips.position : transform.position;
+    }
+
     private Rigidbody FindUpperBody()
     {
         // Prefer a spine/head bone for a natural head-forward tumble; else the heaviest body (hips).

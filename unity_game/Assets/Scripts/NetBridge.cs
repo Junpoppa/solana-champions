@@ -66,6 +66,8 @@ public class NetBridge : MonoBehaviour
         public Transform model;
         public RemoteBeanAnim anim;
         public RemoteRagdoll rag;
+        public Rigidbody rootRb;      // root body: kinematic ghost normally; flipped dynamic on takeover
+        public CapsuleCollider rootCol; // root collider: trigger normally; flipped solid on takeover
         public Vector3 tPos;
         public float tYaw, tS;
         public bool tA;
@@ -75,6 +77,14 @@ public class NetBridge : MonoBehaviour
         public float tCy, tCp; // this player's camera yaw/pitch (spectator view replication)
         public bool active;
         public bool wasDowned;
+        // Orphan takeover: the owner's tab froze, so THIS client simulates the bean as a normal idle
+        // player (real physics: falls through hexes / rolls off the log / gets beamed). Set by
+        // OnPlayerStalled, cleared by OnPlayerResumed. While orphan, snapshots are ignored (physics owns it).
+        public bool orphan;
+        public OrphanBean orphanBean; // hazard-facing handle (added on takeover, removed on resume)
+        public float orphanSettleT; // seconds the orphan ragdoll has been ~still (drives get-up)
+        public float orphanFellFrom; // root.y when taken over — despawn once it falls far below this
+        public bool snapNext; // on un-orphan, snap to the next snapshot instead of lerping back
         // look (retry until the remote's "Character mesh" exists — insurance vs a not-yet-realized mesh)
         public string look;
         public bool lookApplied;
@@ -115,8 +125,11 @@ public class NetBridge : MonoBehaviour
         {
             bool dropped = System.Array.IndexOf(d.ids, e.id) >= 0;
             if (!dropped) { keep.Add(e); continue; }
+            // Already taken over at STALL (its tab froze): keep simulating its fall locally instead of
+            // popping it — it despawns itself once it falls out. Keep it in the roster too.
+            if (remotes.TryGetValue(e.id, out var r) && r.orphan) { keep.Add(e); continue; }
             Debug.Log("[NetBridge] dropped player " + (e.nick ?? e.id) + " (spawnIndex " + e.spawnIndex + ")");
-            if (remotes.TryGetValue(e.id, out var r))
+            if (r != null)
             {
                 if (r.root != null) Destroy(r.root.gameObject);
                 remotes.Remove(e.id);
@@ -183,6 +196,7 @@ public class NetBridge : MonoBehaviour
         {
             if (p == null || p.q == null || p.id == myId) continue;
             if (!remotes.TryGetValue(p.id, out var r)) continue;
+            if (r.orphan) continue; // taken over locally — physics owns the bean, ignore the stream
             r.tPos = new Vector3(p.q.x, p.q.y, p.q.z);
             r.tYaw = p.q.r;
             r.tS = p.q.s;
@@ -192,9 +206,10 @@ public class NetBridge : MonoBehaviour
             r.tFling = new Vector3(p.q.fx, p.q.fy, p.q.fz);
             r.tCy = p.q.cy;
             r.tCp = p.q.cp;
-            if (!r.active)
+            if (!r.active || r.snapNext)
             {
                 r.active = true;
+                r.snapNext = false; // just handed back from a takeover — snap to the owner's real pose
                 r.root.gameObject.SetActive(true);
                 r.root.position = r.tPos;
                 r.root.rotation = Quaternion.Euler(0f, r.tYaw, 0f);
@@ -240,6 +255,8 @@ public class NetBridge : MonoBehaviour
             if (!r.lookApplied) TryApplyRemoteLook(r);
             if (!r.active) continue;
 
+            if (r.orphan) { UpdateOrphan(r); continue; } // taken over — local physics + hazards drive it
+
             // downed edge → replay/recover the real ragdoll (physics owns the pose while limp)
             if (r.tDowned && !r.wasDowned)
             {
@@ -264,6 +281,126 @@ public class NetBridge : MonoBehaviour
             }
             // while downed: leave the root alone — RemoteRagdoll's physics defines the bean's world pose.
         }
+
+        // Despawn orphans that fell out of the world (through the hexes / off the log). Deferred so we
+        // never mutate `remotes` mid-enumeration.
+        if (_orphanDespawn.Count > 0)
+        {
+            foreach (var id in _orphanDespawn)
+                if (remotes.TryGetValue(id, out var r))
+                {
+                    if (r.root != null) Destroy(r.root.gameObject);
+                    remotes.Remove(id);
+                }
+            _orphanDespawn.Clear();
+        }
+    }
+
+    private readonly List<string> _orphanDespawn = new List<string>();
+
+    // Per-frame drive for a taken-over (orphan) bean. Physics + the scene's own hazards already act on
+    // it (LMS hex vanishes under it → falls; RollOut log rolls it off; Spinner beam flings it via the
+    // SpinningBeamHazard hook). Here we only: keep the get-up loop after a beam ragdoll, and despawn it
+    // once it has fallen out of the arena. `r` is looked up back in the dict by root name for removal.
+    private void UpdateOrphan(Remote r)
+    {
+        bool downed = r.rag != null && r.rag.IsRagdolled;
+
+        // Get-up loop (Spinner): once the beam-ragdoll has settled and the bean didn't fall out, stand
+        // it back up so the next sweep hits it again — same as any player.
+        if (downed)
+        {
+            if (r.rag.MaxBoneSpeed() < 0.6f)
+            {
+                r.orphanSettleT += Time.deltaTime;
+                if (r.orphanSettleT > 1.2f) OrphanGetUp(r);
+            }
+            else r.orphanSettleT = 0f;
+        }
+
+        // Fell out of the world → eliminated. While ragdolled the root is frozen, so track the hips.
+        float y = downed ? r.rag.HipsPosition().y : (r.root != null ? r.root.position.y : 0f);
+        if (r.root != null && y < r.orphanFellFrom - 40f)
+        {
+            foreach (var kv in remotes) if (kv.Value == r) { _orphanDespawn.Add(kv.Key); break; }
+        }
+    }
+
+    // A player's tab froze mid-match (server: poses stopped for STALL_MS). Take their bean over on THIS
+    // client: flip the visual-only ghost (kinematic + trigger, no CharacterControls) into a solid,
+    // gravity-driven idle body so the scene's hazards treat it exactly like a motionless player.
+    public void OnPlayerStalled(string json)
+    {
+        DroppedIds d;
+        try { d = JsonUtility.FromJson<DroppedIds>(json); }
+        catch (System.Exception e) { Debug.LogWarning("[NetBridge] bad PlayerStalled: " + e.Message); return; }
+        if (d == null || d.ids == null) return;
+        foreach (var id in d.ids)
+            if (remotes.TryGetValue(id, out var r) && !r.orphan) MakeOrphan(r);
+    }
+
+    // The owner started streaming again before the AFK cutoff — hand the bean back to the network stream.
+    public void OnPlayerResumed(string json)
+    {
+        DroppedIds d;
+        try { d = JsonUtility.FromJson<DroppedIds>(json); }
+        catch { return; }
+        if (d == null || d.ids == null) return;
+        foreach (var id in d.ids)
+            if (remotes.TryGetValue(id, out var r) && r.orphan) UnOrphan(r);
+    }
+
+    private void MakeOrphan(Remote r)
+    {
+        if (r.root == null) return;
+        r.orphan = true;
+        r.orphanSettleT = 0f;
+        if (!r.active) { r.active = true; r.root.gameObject.SetActive(true); }
+        r.orphanFellFrom = r.root.position.y;
+        if (r.rootRb != null)
+        {
+            r.rootRb.isKinematic = false;
+            r.rootRb.useGravity = true;
+            r.rootRb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ; // stay upright, just fall/slide
+            r.rootRb.WakeUp();
+        }
+        if (r.rootCol != null) r.rootCol.isTrigger = false; // solid: rests on surfaces + still vanishes LMS hexes (OnCollisionEnter)
+        if (localCapsule != null && r.rootCol != null) Physics.IgnoreCollision(r.rootCol, localCapsule, true); // never shove the real local player
+        // hazard-facing handle: RollDrum carries it, SpinningBeamHazard flings it (both gate on CharacterControls otherwise)
+        var ob = r.root.GetComponent<OrphanBean>() ?? r.root.gameObject.AddComponent<OrphanBean>();
+        ob.body = r.rootRb; ob.bodyCol = r.rootCol; ob.ragdoll = r.rag;
+        r.orphanBean = ob;
+        if (r.anim != null) r.anim.SetMotion(0f, false); // stand idle
+        Debug.Log("[NetBridge] took over stalled bean " + r.root.name);
+    }
+
+    private void UnOrphan(Remote r)
+    {
+        r.orphan = false;
+        if (r.rag != null && r.rag.IsRagdolled) r.rag.Recover();
+        if (r.orphanBean != null) { Destroy(r.orphanBean); r.orphanBean = null; }
+        if (r.rootRb != null)
+        {
+            r.rootRb.constraints = RigidbodyConstraints.None;
+            r.rootRb.isKinematic = true;
+            r.rootRb.useGravity = false;
+        }
+        if (r.rootCol != null) { r.rootCol.enabled = true; r.rootCol.isTrigger = true; } // back to visual-only ghost
+        r.snapNext = true; // next snapshot snaps it to the owner's real pose instead of lerping back
+        if (r.root != null) Debug.Log("[NetBridge] handed back resumed bean " + r.root.name);
+    }
+
+    // Stand a settled orphan ragdoll back up (Spinner get-up), moving the root to where the bones came
+    // to rest so it stands where it tumbled, then re-enabling its solid body for the next beam sweep.
+    private void OrphanGetUp(Remote r)
+    {
+        r.orphanSettleT = 0f;
+        Vector3 rest = r.rag != null ? r.rag.HipsPosition() : (r.root != null ? r.root.position : Vector3.zero);
+        if (r.rag != null) r.rag.Recover();
+        if (r.rootCol != null) r.rootCol.enabled = true;
+        if (r.rootRb != null) { r.rootRb.isKinematic = false; r.rootRb.useGravity = true; r.rootRb.WakeUp(); }
+        if (r.root != null) r.root.position = rest; // stand where it tumbled to; gravity re-settles it
+        if (r.anim != null) r.anim.SetMotion(0f, false);
     }
 
     private static string F(float f) => f.ToString("0.###", CultureInfo.InvariantCulture);
@@ -359,7 +496,7 @@ public class NetBridge : MonoBehaviour
                     if (bc != null) Physics.IgnoreCollision(bc, localCapsule, true);
 
             root.SetActive(false); // shown on first snapshot (avoids a frame at origin)
-            remotes[e.id] = new Remote { root = root.transform, model = model.transform, anim = ra, rag = rr, look = e.look };
+            remotes[e.id] = new Remote { root = root.transform, model = model.transform, anim = ra, rag = rr, rootRb = rrb, rootCol = rcol, look = e.look };
         }
         spawnedRemotes = true;
 

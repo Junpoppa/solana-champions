@@ -78,9 +78,15 @@ public class RollDrum : MonoBehaviour
             Collider col = _hits[i];
             if (col == null || !col.CompareTag(playerTag)) continue;
             CharacterControls cc = col.GetComponentInParent<CharacterControls>();
-            if (cc == null) continue;
-            Rigidbody brb = cc.GetComponent<Rigidbody>();
-            if (brb == null || brb.isKinematic) continue; // ragdolling -> root kinematic, leave it alone
+            Rigidbody brb;
+            if (cc != null) brb = cc.GetComponent<Rigidbody>();
+            else
+            {
+                // Ownerless (frozen-tab) bean — no CharacterControls, but drift it like a standing player.
+                var ob = col.GetComponentInParent<OrphanBean>();
+                brb = ob != null ? ob.body : null;
+            }
+            if (brb == null || brb.isKinematic) continue; // no body / ragdolling (root kinematic) -> leave it alone
 
             Vector3 beanPos = brb.position;
             float t = Mathf.Clamp(Vector3.Dot(beanPos - center, axis), -halfLength, halfLength);

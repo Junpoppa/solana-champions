@@ -12,4 +12,8 @@ server/dist
 start-multiplayer.bat
 _spin.bat
 Twitter Screens
-*.png
+# Exclude ONLY junk screenshots — a bare `*.png` also nuked web/public UI images
+# (faces, level thumbnails, start-menu bg) → broke the live site. Keep web/public/** PNGs.
+/*.png
+_diag
+web/shots

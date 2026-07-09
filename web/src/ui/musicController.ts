@@ -6,35 +6,45 @@ import { initStrudel, evaluate, hush, getAudioContext, samples } from "@strudel/
 // loop. Browsers block audio until a user gesture, so the tracks only start from inside the click that
 // enters the lobby / the JOIN click — both valid gestures.
 
-// lo-fi lobby loop · mellow, loops forever (user-authored). NOTE: authored with `$:` multi-patterns
+// morning tech-house · deeper, cleaner, loops forever (user-authored). NOTE: authored with `$:` multi-patterns
 // in the REPL; expressed here as ONE stack(...) so the master .gain() (volume slider) chains onto the end.
 const LOBBY_PATTERN = String.raw`
-setcps(74/60/4)                     // ~74 bpm, slow & sleepy
+setcps(122/60/4)                    // ~122 bpm
 
 stack(
-  // warm jazzy keys — Amaj7 · F#m7 · Dmaj7 · E7 (one chord/cycle)
-  note("<[a3,c#4,e4,g#4] [f#3,a3,c#4,e4] [d3,f#3,a3,c#4] [e3,g#3,b3,d4]>")
-    .s("piano")
-    .lpf(1100)                      // roll off highs = soft/dusty
-    .gain(0.5)
-    .room(0.5).roomsize(4)          // spacious reverb
-    .velocity(0.7),
-
-  // soft round bass on the chord roots
-  note("<a1 f#1 d1 e1>")
+  // warm sustained chords — Cmaj7 · Am7 · Fmaj7 · G, smooth pads not stabs
+  note("<[e4,g4,b4] [c4,e4,g4] [f4,a4,c5] [d4,g4,b4]>")
     .s("sawtooth")
-    .lpf(420).lpq(3)                // deep, no sharp edges
-    .attack(0.02).release(0.35)
-    .gain(0.75),
+    .lpf(1400).lpq(1)                 // rolled off = mellow, not bright/toony
+    .attack(0.15).release(0.6)        // soft swell instead of plucky pop
+    .gain(0.35)
+    .room(0.4).roomsize(3),
 
-  // laid-back drums, swung so it feels human
+  // rolling tech-house bassline — off-beat, deep and round
+  note("<[~ c2 ~ c2 ~ c2 ~ c2] [~ a1 ~ a1 ~ a1 ~ a1] [~ f1 ~ f1 ~ f1 ~ f1] [~ g1 ~ g1 ~ g1 ~ g1]>")
+    .s("sawtooth")
+    .lpf(520).lpq(3)                  // deeper, less buzzy
+    .attack(0.008).release(0.14)
+    .gain(0.8),
+
+  // subtle high shimmer — very sparse, no melody-toy feel
+  note("<c6 e6 a5 g6>")
+    .s("triangle")
+    .lpf(4000)
+    .gain(0.22)
+    .attack(0.01).release(0.4)
+    .room(0.45).roomsize(4)
+    .degradeBy(0.5),
+
+  // clean tech-house groove
   stack(
-    s("bd ~ ~ bd"),                 // relaxed kick
-    s("~ ~ sd ~").gain(0.55),       // backbeat snare
-    s("hh*4").gain(0.35).lpf(2600)  // gentle closed hats, dulled
+    s("bd*4").gain(0.9),
+    s("~ cp ~ cp").gain(0.35),        // softer clap
+    s("[~ hh]*4").gain(0.32).lpf(6000), // off-beat hats, less crisp
+    s("~ ~ oh ~").gain(0.22)
   )
-  .bank("RolandTR808")
-  .swingBy(1/3, 4)
+  .bank("RolandTR909")
+  .swingBy(1/8, 8)                    // subtler shuffle
 )
 `;
 

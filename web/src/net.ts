@@ -12,8 +12,6 @@ import type {
   ChatMsg,
   ErrorMsg,
   PlayersDroppedMsg,
-  PlayerStalledMsg,
-  PlayerResumedMsg,
   MatchMissedMsg,
   MatchAbortedMsg,
   ReadyUpdateMsg,
@@ -41,8 +39,6 @@ interface Handlers {
   onBeginCountdown?: (goAtEpochMs: number) => void; // GO fires at this server-clock instant, same for all players
   onReadyUpdate?: (m: ReadyUpdateMsg) => void; // loading progress while the room waits for all players
   onPlayersDropped?: (m: PlayersDroppedMsg) => void; // players who missed the start — despawn their avatars
-  onPlayerStalled?: (m: PlayerStalledMsg) => void; // owners' tabs froze — take their beans over locally
-  onPlayerResumed?: (m: PlayerResumedMsg) => void; // owners streamed again — hand their beans back
   onMatchMissed?: (m: MatchMissedMsg) => void; // we missed the start; server re-queued us
   onMatchAborted?: (m: MatchAbortedMsg) => void; // match cancelled (<2 ready) — back to the queue
   onChatMsg?: (m: ChatMsg) => void; // a lobby chat line from another player
@@ -188,12 +184,6 @@ function dispatch(msg: ServerMsg) {
     case "playersDropped":
       handlers.onPlayersDropped?.(msg);
       break;
-    case "playerStalled":
-      handlers.onPlayerStalled?.(msg);
-      break;
-    case "playerResumed":
-      handlers.onPlayerResumed?.(msg);
-      break;
     case "matchMissed":
       queuedMode = msg.mode; // server re-queued us — a reconnect should keep us in that line
       handlers.onMatchMissed?.(msg);
@@ -307,6 +297,15 @@ export const net = {
   // My LOCAL bean stepped an LMS hex — feed the server's watcher hex-state sync.
   sendHexVanish(idx: number) {
     send({ t: "hexVanish", idx });
+  },
+
+  // We simulated an abandoned (frozen-tab) bean and it fell out of the arena — report ITS elimination
+  // so last-man-standing resolves and it isn't crowned the winner. `json` = {"id","ms"} from Unity.
+  sendPeerOut(json: string) {
+    try {
+      const o = JSON.parse(json) as { id?: string; ms?: number };
+      if (o && typeof o.id === "string") send({ t: "peerOut", id: o.id, survivalMs: Number(o.ms) || 0 });
+    } catch { /* malformed — ignore */ }
   },
 
   reportResult(mode: GameMode, survivalMs: number, finished: boolean) {

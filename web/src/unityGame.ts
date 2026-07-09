@@ -183,6 +183,9 @@ export const unityGame = {
     spectating = false;
     // Live avatars: Unity streams the local bean's pose (raw JSON) → server ~15 Hz.
     (window as any).__unityNetSend = (s: string) => net.sendState(s);
+    // We took over an abandoned (frozen-tab) bean and it fell out — report its elimination so the
+    // server doesn't crown it the survivor (its own tab can't report). {"id","ms"} JSON.
+    (window as any).__unityPeerOut = (s: string) => net.sendPeerOut(s);
     // LMS spectator hex sync: our LOCAL bean stepped a hex — report the tile index.
     (window as any).__unityHexVanish = (idx: number) => net.sendHexVanish(idx);
     // Synchronized start: Unity's IntroCountdown tells us the scene is loaded + frozen → we report ready.
@@ -338,15 +341,6 @@ export const unityGame = {
   pushPlayersDropped(idsJson: string) {
     instance?.SendMessage("NetBridge", "OnPlayersDropped", idsJson);
   },
-  // A player's tab froze mid-match — take their bean over locally and simulate it as an idle
-  // player (real physics: falls through hexes / rolls off the log / gets beamed).
-  pushPlayerStalled(idsJson: string) {
-    instance?.SendMessage("NetBridge", "OnPlayerStalled", idsJson);
-  },
-  // The owner is streaming again — hand their bean back to the network stream.
-  pushPlayerResumed(idsJson: string) {
-    instance?.SendMessage("NetBridge", "OnPlayerResumed", idsJson);
-  },
   // Watched match: LMS tiles vanished (server relay) — apply to our world state.
   pushHexVanish(json: string) {
     instance?.SendMessage("NetBridge", "OnHexVanish", json);
@@ -371,6 +365,7 @@ export const unityGame = {
     (window as any).__unityGameOver = null;
     (window as any).__unityMatchResult = null;
     (window as any).__unityNetSend = null;
+    (window as any).__unityPeerOut = null;
     (window as any).__unityReady = null;
     (window as any).__unityHexVanish = null;
     // Drop the gameplay scene back to the lightweight Boot scene so the next JOIN starts clean

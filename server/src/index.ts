@@ -207,6 +207,12 @@ function handle(player: Player, msg: ClientMsg): void {
       });
       break;
     }
+    case "peerOut": {
+      if (typeof msg.id === "string") {
+        rm.reportPeerOut(player, msg.id, clamp(Number(msg.survivalMs) || 0, 0, config.MATCH_WATCHDOG_MS));
+      }
+      break;
+    }
     case "state": {
       const pose = toPose(msg.q);
       if (pose) rm.setPose(player, pose);

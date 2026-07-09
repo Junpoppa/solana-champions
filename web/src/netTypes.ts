@@ -42,6 +42,7 @@ export type ClientMsg =
   | { t: "joinQueue"; mode: GameMode }
   | { t: "leaveQueue" }
   | { t: "reportResult"; mode: GameMode; survivalMs: number; finished: boolean; reason?: string }
+  | { t: "peerOut"; id: string; survivalMs: number } // an abandoned bean I simulated fell out — eliminate it
   | { t: "state"; q: Pose }
   | { t: "ready" }
   | { t: "chat"; text: string }
@@ -59,8 +60,6 @@ export interface BeginCountdownMsg { t: "beginCountdown"; goAtEpochMs: number } 
 export interface TimeSyncPongMsg { t: "timeSyncPong"; t0: number; serverNow: number }
 export interface ReadyUpdateMsg { t: "readyUpdate"; mode: GameMode; ready: number; total: number } // loading progress while waiting for all players
 export interface PlayersDroppedMsg { t: "playersDropped"; mode: GameMode; ids: string[] } // missed the start; despawn their avatars
-export interface PlayerStalledMsg { t: "playerStalled"; mode: GameMode; ids: string[] } // owners' tabs froze — take their beans over locally
-export interface PlayerResumedMsg { t: "playerResumed"; mode: GameMode; ids: string[] } // owners streamed again — hand their beans back to the stream
 export interface MatchMissedMsg { t: "matchMissed"; mode: GameMode; requeued: boolean } // we missed the start; re-queued for next match
 export interface MatchAbortedMsg { t: "matchAborted"; mode: GameMode } // <2 ready players — match cancelled
 export interface ChatMsg { t: "chatMsg"; id: string; nick: string; text: string; ts: number }
@@ -84,6 +83,5 @@ export interface HexVanishMsg { t: "hexVanish"; idxs: number[] } // relay to wat
 
 export type ServerMsg =
   | IdentifiedMsg | QueueUpdateMsg | MatchStartMsg | SnapshotMsg | BeginCountdownMsg
-  | TimeSyncPongMsg | ReadyUpdateMsg | PlayersDroppedMsg | PlayerStalledMsg | PlayerResumedMsg
-  | MatchMissedMsg | MatchAbortedMsg
+  | TimeSyncPongMsg | ReadyUpdateMsg | PlayersDroppedMsg | MatchMissedMsg | MatchAbortedMsg
   | ChatMsg | StandingsMsg | LobbyStatusMsg | WatchStartMsg | WatchEndMsg | HexVanishMsg | ErrorMsg;

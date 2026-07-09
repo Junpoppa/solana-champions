@@ -54,6 +54,7 @@ export type ClientMsg =
   | { t: "joinQueue"; mode: GameMode }
   | { t: "leaveQueue" }
   | { t: "reportResult"; mode: GameMode; survivalMs: number; finished: boolean; reason?: string }
+  | { t: "peerOut"; id: string; survivalMs: number } // an abandoned bean I simulated fell out — eliminate it
   | { t: "state"; q: Pose } // live pose while in a match
   | { t: "ready" } // gameplay scene loaded; waiting for the synchronized countdown start
   | { t: "chat"; text: string } // lobby text chat (broadcast to other lobby players)
@@ -96,8 +97,6 @@ export type ServerMsg =
   | { t: "timeSyncPong"; t0: number; serverNow: number } // reply to timeSync (echoes t0 for RTT)
   | { t: "readyUpdate"; mode: GameMode; ready: number; total: number } // loading progress while waiting for all players
   | { t: "playersDropped"; mode: GameMode; ids: string[] } // these players missed the start; despawn their avatars
-  | { t: "playerStalled"; mode: GameMode; ids: string[] } // owners' tabs froze — take over their beans locally (simulate as idle players)
-  | { t: "playerResumed"; mode: GameMode; ids: string[] } // owners streamed again before AFK — hand their beans back to the network stream
   | { t: "matchMissed"; mode: GameMode; requeued: boolean } // you missed the start; you're re-queued for the next match
   | { t: "matchAborted"; mode: GameMode } // <2 players were ready — match cancelled, back to the queue
   | { t: "chatMsg"; id: string; nick: string; text: string; ts: number } // a lobby chat line (server-stamped nick/id)

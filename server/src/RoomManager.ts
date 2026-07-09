@@ -96,6 +96,11 @@ export class RoomManager {
     this.get(mode).reportResult(p, result);
   }
 
+  // A player simulating an abandoned bean saw it fall out — eliminate that bean in the reporter's room.
+  reportPeerOut(reporter: Player, targetId: string, survivalMs: number): void {
+    if (reporter.roomMode) this.get(reporter.roomMode).reportPeerOut(reporter, targetId, survivalMs);
+  }
+
   setPose(p: Player, pose: Pose): void {
     if (p.roomMode) this.get(p.roomMode).setPose(p, pose);
   }

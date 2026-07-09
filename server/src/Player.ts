@@ -21,7 +21,6 @@ export class Player {
   spawnIndex = 0; // assigned at match start
   pose: Pose | null = null; // latest live pose (for avatar snapshots)
   lastPoseAt: number | null = null; // when that pose arrived — stale = hidden tab / dead client (AFK watchdog)
-  stalled = false; // poses stopped for STALL_MS → clients told to take over this bean (playerStalled). Cleared on resume/AFK/reset.
 
   constructor(id: string, ws: WebSocket) {
     this.id = id;

@@ -18,8 +18,10 @@ public class NetBridge : MonoBehaviour
 {
 #if UNITY_WEBGL && !UNITY_EDITOR
     [DllImport("__Internal")] private static extern void NetSend(string s);
+    [DllImport("__Internal")] private static extern void NetReportPeerOut(string s);
 #else
     private static void NetSend(string s) { /* editor no-op */ }
+    private static void NetReportPeerOut(string s) { /* editor no-op */ }
 #endif
 
     // ---- match info (cached statically so the gameplay scene reads it after the Boot→mode swap) ----
@@ -85,6 +87,11 @@ public class NetBridge : MonoBehaviour
         public float orphanSettleT; // seconds the orphan ragdoll has been ~still (drives get-up)
         public float orphanFellFrom; // root.y when taken over — despawn once it falls far below this
         public bool snapNext; // on un-orphan, snap to the next snapshot instead of lerping back
+        public Vector3 lastRawPos; // previous incoming pose position (movement detection while orphaned)
+        public bool hasRawPos;
+        public int moveStreak; // consecutive snapshots whose pose actually moved — sustained = live owner
+        public bool awakeConfirmed; // owner proved live (sustained movement) → follow the stream, never re-orphan
+        public bool reportedOut; // this orphan's elimination was already reported to the server (fire once)
         // look (retry until the remote's "Character mesh" exists — insurance vs a not-yet-realized mesh)
         public string look;
         public bool lookApplied;
@@ -102,6 +109,8 @@ public class NetBridge : MonoBehaviour
     private bool spawnedRemotes;
     private float sendAccum;
     private SpectatorCamera specCam; // spectator mode only (created in TrySpawnRemotes)
+    private bool goFired; // GO happened this match → every remote starts being simulated as an idle player
+    private IntroCountdown intro; // this scene's countdown (per-match HasFired; cached once found)
 
     // ---- JS → Unity ----
     public void OnMatchInfo(string json)
@@ -196,8 +205,35 @@ public class NetBridge : MonoBehaviour
         {
             if (p == null || p.q == null || p.id == myId) continue;
             if (!remotes.TryGetValue(p.id, out var r)) continue;
-            if (r.orphan) continue; // taken over locally — physics owns the bean, ignore the stream
-            r.tPos = new Vector3(p.q.x, p.q.y, p.q.z);
+            var inPos = new Vector3(p.q.x, p.q.y, p.q.z);
+
+            // A bean simulated locally as an idle player (orphan): watch its stream. A LIVE owner streams
+            // positions that drift from the GO baseline; a frozen/untouched tab's pose stays put (the
+            // server re-broadcasts its last pose). First real drift → the owner is awake → hand it back to
+            // the network stream. Otherwise keep simulating it locally (physics owns the transform).
+            if (r.orphan)
+            {
+                // still record targets so a handed-back bean has fresh data to snap to
+                r.tPos = inPos; r.tYaw = p.q.r; r.tS = p.q.s; r.tA = p.q.a > 0.5f;
+                r.tDowned = p.q.d > 0.5f; r.tJump = p.q.j > 0.5f;
+                r.tFling = new Vector3(p.q.fx, p.q.fy, p.q.fz); r.tCy = p.q.cy; r.tCp = p.q.cp;
+                // Sustained movement = a live owner. A frozen tab re-sends the SAME pose (no move); a
+                // partially-throttled tab dribbles the odd move (streak resets), so neither hands back.
+                bool moved = r.hasRawPos && (inPos - r.lastRawPos).sqrMagnitude > 0.03f * 0.03f;
+                r.lastRawPos = inPos; r.hasRawPos = true;
+                r.moveStreak = moved ? r.moveStreak + 1 : 0;
+                if (r.moveStreak >= 3)
+                {
+                    UnOrphan(r);
+                    r.awakeConfirmed = true; // proven live — never re-orphan this bean
+                    r.snapNext = false;
+                    r.root.position = inPos;
+                    r.root.rotation = Quaternion.Euler(0f, r.tYaw, 0f);
+                }
+                continue;
+            }
+
+            r.tPos = inPos;
             r.tYaw = p.q.r;
             r.tS = p.q.s;
             r.tA = p.q.a > 0.5f;
@@ -222,6 +258,21 @@ public class NetBridge : MonoBehaviour
     {
         if (!WebBridge.Multiplayer || !HasMatch) return;
         if (!spawnedRemotes) { TrySpawnRemotes(); return; }
+
+        // GO detection (this scene's countdown → per-match; no stale-static risk). At the GO frame every
+        // remote starts being simulated locally as a plain idle player, so an un-driven bean drops on GO
+        // and falls through identically to the local bean. An awake owner is handed straight back to the
+        // network stream by OnSnapshot the instant its pose actually moves.
+        if (!goFired)
+        {
+            if (intro == null) intro = Object.FindFirstObjectByType<IntroCountdown>();
+            if (intro != null && intro.HasFired)
+            {
+                goFired = true;
+                foreach (var r in remotes.Values)
+                    if (r.active && !r.orphan && !r.awakeConfirmed) MakeOrphan(r);
+            }
+        }
 
         // stream local pose ~15 Hz
         sendAccum += Time.deltaTime;
@@ -320,36 +371,24 @@ public class NetBridge : MonoBehaviour
 
         // Fell out of the world → eliminated. While ragdolled the root is frozen, so track the hips.
         float y = downed ? r.rag.HipsPosition().y : (r.root != null ? r.root.position.y : 0f);
-        if (r.root != null && y < r.orphanFellFrom - 40f)
+        if (r.root != null && !r.reportedOut && y < r.orphanFellFrom - 40f)
         {
-            foreach (var kv in remotes) if (kv.Value == r) { _orphanDespawn.Add(kv.Key); break; }
+            r.reportedOut = true;
+            foreach (var kv in remotes)
+                if (kv.Value == r)
+                {
+                    // We (the awake client) simulated this abandoned bean falling out — its own frozen tab
+                    // can't report its death, so WE tell the server, or it would be crowned the survivor.
+                    NetReportPeerOut("{\"id\":\"" + kv.Key + "\",\"ms\":" + F(MatchClock.ElapsedMs) + "}");
+                    _orphanDespawn.Add(kv.Key);
+                    break;
+                }
         }
     }
 
-    // A player's tab froze mid-match (server: poses stopped for STALL_MS). Take their bean over on THIS
-    // client: flip the visual-only ghost (kinematic + trigger, no CharacterControls) into a solid,
-    // gravity-driven idle body so the scene's hazards treat it exactly like a motionless player.
-    public void OnPlayerStalled(string json)
-    {
-        DroppedIds d;
-        try { d = JsonUtility.FromJson<DroppedIds>(json); }
-        catch (System.Exception e) { Debug.LogWarning("[NetBridge] bad PlayerStalled: " + e.Message); return; }
-        if (d == null || d.ids == null) return;
-        foreach (var id in d.ids)
-            if (remotes.TryGetValue(id, out var r) && !r.orphan) MakeOrphan(r);
-    }
-
-    // The owner started streaming again before the AFK cutoff — hand the bean back to the network stream.
-    public void OnPlayerResumed(string json)
-    {
-        DroppedIds d;
-        try { d = JsonUtility.FromJson<DroppedIds>(json); }
-        catch { return; }
-        if (d == null || d.ids == null) return;
-        foreach (var id in d.ids)
-            if (remotes.TryGetValue(id, out var r) && r.orphan) UnOrphan(r);
-    }
-
+    // Flip a remote's visual-only ghost (kinematic + trigger, no CharacterControls) into a solid,
+    // gravity-driven idle body so the scene's hazards treat it exactly like a motionless player. Called
+    // for every remote at the GO frame; an awake owner is handed back by OnSnapshot the moment it moves.
     private void MakeOrphan(Remote r)
     {
         if (r.root == null) return;
@@ -357,6 +396,7 @@ public class NetBridge : MonoBehaviour
         r.orphanSettleT = 0f;
         if (!r.active) { r.active = true; r.root.gameObject.SetActive(true); }
         r.orphanFellFrom = r.root.position.y;
+        r.lastRawPos = r.root.position; r.hasRawPos = true; r.moveStreak = 0; // movement-vs-baseline for handback
         if (r.rootRb != null)
         {
             r.rootRb.isKinematic = false;

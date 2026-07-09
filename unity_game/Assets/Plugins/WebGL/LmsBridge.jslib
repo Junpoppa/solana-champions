@@ -33,6 +33,15 @@ mergeInto(LibraryManager.library, {
     }
   },
 
+  // Called from NetBridge.cs when THIS client (which took over an abandoned/frozen bean) sees that
+  // bean fall out of the arena. Its own tab can't report its death, so we report it: {"id","ms"}.
+  NetReportPeerOut: function (ptr) {
+    var s = UTF8ToString(ptr);
+    if (typeof window !== 'undefined' && typeof window.__unityPeerOut === 'function') {
+      window.__unityPeerOut(s);
+    }
+  },
+
   // Called from IntroCountdown.cs once per tick ("3","2","1","GO") and once more with "" to clear.
   // Drives the beefy DOM overlay (web/src/ui/countdown.ts). Unity owns the timing; this is purely visual.
   CountdownTick: function (ptr) {

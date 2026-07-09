@@ -6,46 +6,35 @@ import { initStrudel, evaluate, hush, getAudioContext, samples } from "@strudel/
 // loop. Browsers block audio until a user gesture, so the tracks only start from inside the click that
 // enters the lobby / the JOIN click — both valid gestures.
 
+// lo-fi lobby loop · mellow, loops forever (user-authored). NOTE: authored with `$:` multi-patterns
+// in the REPL; expressed here as ONE stack(...) so the master .gain() (volume slider) chains onto the end.
 const LOBBY_PATTERN = String.raw`
-setcpm(105/4)
+setcps(74/60/4)                     // ~74 bpm, slow & sleepy
 
-// soft menu ambience, not too musical
-let softPulse = stack(
-  s("bd ~ ~ ~").bank("RolandTR808").gain(.18),
-  s("~ ~ hh ~").bank("RolandTR808").gain(.08),
-  s("~ ~ ~ oh").bank("RolandTR909").gain(.08)
-)
+stack(
+  // warm jazzy keys — Amaj7 · F#m7 · Dmaj7 · E7 (one chord/cycle)
+  note("<[a3,c#4,e4,g#4] [f#3,a3,c#4,e4] [d3,f#3,a3,c#4] [e3,g#3,b3,d4]>")
+    .s("piano")
+    .lpf(1100)                      // roll off highs = soft/dusty
+    .gain(0.5)
+    .room(0.5).roomsize(4)          // spacious reverb
+    .velocity(0.7),
 
-let softBass = note("d#2 ~ ~ ~ c#2 ~ b1 ~")
-  .s("sawtooth")
-  .lpf(150)
-  .release(.4)
-  .gain(.28)
+  // soft round bass on the chord roots
+  note("<a1 f#1 d1 e1>")
+    .s("sawtooth")
+    .lpf(420).lpq(3)                // deep, no sharp edges
+    .attack(0.02).release(0.35)
+    .gain(0.75),
 
-let pad = note("d#4 ~ f#4 ~ a#4 ~ c#5 ~")
-  .s("sine")
-  .release(1.2)
-  .room(.8)
-  .gain(.18)
-
-let uiBleeps = note("d#6 ~ ~ f#6 ~ a#6 ~ ~")
-  .s("triangle")
-  .release(.12)
-  .delay(.25)
-  .room(.55)
-  .gain(.11)
-
-let shimmer = note("d#5 f#5 a#5 c#6")
-  .s("triangle")
-  .fast(1)
-  .gain(.08)
-  .room(.7)
-
-arrange(
-  [8, stack(softPulse, softBass, pad)],
-  [8, stack(softPulse, softBass, pad, uiBleeps)],
-  [8, stack(softPulse, softBass, pad, shimmer)],
-  [8, stack(softPulse, softBass, pad, uiBleeps, shimmer)]
+  // laid-back drums, swung so it feels human
+  stack(
+    s("bd ~ ~ bd"),                 // relaxed kick
+    s("~ ~ sd ~").gain(0.55),       // backbeat snare
+    s("hh*4").gain(0.35).lpf(2600)  // gentle closed hats, dulled
+  )
+  .bank("RolandTR808")
+  .swingBy(1/3, 4)
 )
 `;
 
@@ -240,6 +229,13 @@ function ensureInit(): Promise<void> {
         await samples("https://raw.githubusercontent.com/felixroos/dough-samples/main/tidal-drum-machines.json");
       } catch (e) {
         console.warn("[music] drum-machine samples failed to load:", e);
+      }
+      // The default prebake also lacks the `piano` sample set, so the lobby lo-fi track's .s("piano")
+      // chords were SILENT ("[getTrigger] error: sound piano not found"). Load the Salamander piano pack.
+      try {
+        await samples("https://raw.githubusercontent.com/felixroos/dough-samples/main/piano.json");
+      } catch (e) {
+        console.warn("[music] piano samples failed to load:", e);
       }
       // NOTE: GM soundfonts (gm_*) were dropped — @strudel/web's bundled engine can't see instruments
       // registered by the standalone @strudel/soundfonts (separate audio-engine instance), so those layers

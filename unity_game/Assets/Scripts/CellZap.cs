@@ -28,10 +28,12 @@ public class CellZap : MonoBehaviour
     public string playerTag = "Player";
 
     [Header("Slowdown debuff")]
-    [Tooltip("Movement-speed multiplier applied to the bean on a zap (0.65 = 35% slower).")]
-    public float slowMult = 0.65f;
-    [Tooltip("Seconds the slowdown lasts.")]
-    public float slowDuration = 2f;
+    [Tooltip("Movement-speed multiplier applied to the bean on a zap (0.6 = 40% slower). Also scales the " +
+             "bean's acceleration, so a zap reads as HEAVY, not merely slow.")]
+    public float slowMult = 0.6f;
+    [Tooltip("Seconds the slowdown lasts. The log's carry is NOT slowed, so a slowed bean is dragged toward " +
+             "the rolling edge far more than it can walk back — the asymmetry is the punish.")]
+    public float slowDuration = 5f;
 
     [Header("Zap VFX")]
     [Tooltip("One-shot electric particle prefab spawned on the bean (assigned by the builder).")]

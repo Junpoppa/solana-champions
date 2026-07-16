@@ -39,9 +39,12 @@ public class CharacterControls : MonoBehaviour {
 
 	// Temporary movement slowdown (e.g. Roll Out energy-cell zap). Multiplies the player's TARGET
 	// velocity only, so walking against the conveyor is harder without touching RollDrum's carry.
+	// It ALSO scales the per-step acceleration clamp (see FixedUpdate), which is what makes a zap feel
+	// HEAVY — mushy to get going, mushy to stop — rather than just capped at a lower top speed.
 	private float slowMult = 1f;
 	private float slowTimer = 0f;
 	public void ApplySlow(float mult, float duration){ slowMult = mult; slowTimer = Mathf.Max(slowTimer, duration); }
+	private float SlowAccel { get { return maxVelocityChange * slowMult; } }
 
 	public Vector3 checkPoint;
 	private bool slide = false;
@@ -108,8 +111,8 @@ public class CharacterControls : MonoBehaviour {
 					rb.linearVelocity /= 1.1f;
 				}
 				Vector3 velocityChange = (targetVelocity - velocity);
-				velocityChange.x = Mathf.Clamp(velocityChange.x, -maxVelocityChange, maxVelocityChange);
-				velocityChange.z = Mathf.Clamp(velocityChange.z, -maxVelocityChange, maxVelocityChange);
+				velocityChange.x = Mathf.Clamp(velocityChange.x, -SlowAccel, SlowAccel);
+				velocityChange.z = Mathf.Clamp(velocityChange.z, -SlowAccel, SlowAccel);
 				velocityChange.y = 0;
 				if (!slide)
 				{
@@ -129,8 +132,8 @@ public class CharacterControls : MonoBehaviour {
 					Vector3 targetVelocity = new Vector3(moveDir.x * airVelocity * slowMult, rb.linearVelocity.y, moveDir.z * airVelocity * slowMult);
 					Vector3 velocity = rb.linearVelocity;
 					Vector3 velocityChange = (targetVelocity - velocity);
-					velocityChange.x = Mathf.Clamp(velocityChange.x, -maxVelocityChange, maxVelocityChange);
-					velocityChange.z = Mathf.Clamp(velocityChange.z, -maxVelocityChange, maxVelocityChange);
+					velocityChange.x = Mathf.Clamp(velocityChange.x, -SlowAccel, SlowAccel);
+					velocityChange.z = Mathf.Clamp(velocityChange.z, -SlowAccel, SlowAccel);
 					rb.AddForce(velocityChange, ForceMode.VelocityChange);
 					if (velocity.y < -maxFallSpeed)
 						rb.linearVelocity = new Vector3(velocity.x, -maxFallSpeed, velocity.z);

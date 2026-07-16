@@ -36,6 +36,17 @@ server/dist/
 .env.local
 .env.*.local
 
+# marketing/recording dumps — contains a 531MB .mp4, far over GitHub's 100MB hard limit,
+# so an unguarded `git add -A` here would fail the push outright
+Twitter Screens/
+
+# ad-hoc Unity scene recovery dumps (~6MB each). The already-committed 0.unity / 0 (1).unity
+# stay tracked — this only stops NEW dumps from leaking in.
+unity_game/Assets/_Recovery/
+
+# regenerated into Resources/ by the Performance Testing package on every player build
+unity_game/Assets/Resources/PerformanceTestRun*.json
+
 # ================= Dev/session junk =================
 _diag/
 .playwright-mcp/
@@ -47,3 +58,4 @@ skills-lock.json
 av-bob.jpeg
 bean-check-1.png
 start.png
+spec-playercam-1.png

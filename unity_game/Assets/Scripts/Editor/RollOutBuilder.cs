@@ -277,7 +277,7 @@ public static class RollOutBuilder
             zap.flashColor = new Color(0.05f, 0.1f, 1f); // deep pure blue (glass flash + VFX tint)
             // punish tuning (explicit so a re-bake keeps it; scene instances serialize these values)
             zap.pushSpeed = 7f; zap.upPop = 2.5f;
-            zap.slowMult = 0.65f; zap.slowDuration = 2f;
+            zap.slowMult = 0.6f; zap.slowDuration = 5f;
         }
     }
 
@@ -660,6 +660,222 @@ public static class RollOutBuilder
         AssetDatabase.CreateFolder(parent, leaf);
     }
 
+    // ================= CELL THIN-OUT (additive; NEVER regenerates the level) =================
+    // The log carried 30 energy cells (10 rows x 3 across) — cells dominated the obstacle mix. This swaps
+    // six of those rows for walls / gaps, leaving 4 rows (12 cells) so a zap reads as a rare punish.
+    //
+    // Why a separate additive tool instead of re-authoring PROFILES and re-running Generate(): Generate()
+    // does DestroyImmediate(RollOut_Field) + SaveScene() with no prompt, which would wipe the user's
+    // hand-enlarged cells and all 150 arrows irreversibly (MCP edits bypass Undo). So this operates in
+    // place: it deletes ONLY the rows being converted, and rebuilds ONLY the meshes of gap-converted bands.
+    //
+    // Gaps are holes in the band mesh (not objects), so a gap conversion re-cuts that band's mesh with one
+    // extra arc. Everything else on the band (obstacles, arrows) survives a mesh swap untouched.
+    // Idempotent: a row that's already been converted is simply reported as done and skipped.
+    struct CellSwap
+    {
+        public int band; public int angle; public Kind to;
+        public CellSwap(int b, int a, Kind k) { band = b; angle = a; to = k; }
+    }
+
+    // Angles are the LIVE row angles (authored angle + BAND_PHASE, i.e. what ComputePlans emits).
+    // Chosen to respect the builder's own placement rules: >= FILL_MIN_SPACING(30) from obstacles in the
+    // same band, >= ANTI_ALIGN(14) from neighbour-band obstacles, and SPAWN_CLEAR(28) around band 2's top.
+    // Result: 10 cell rows -> 4 kept; walls 5 -> 8; gaps 10 -> 13.
+    static readonly CellSwap[] CELL_SWAPS = {
+        new CellSwap(0, 153, Kind.Gap),   // band 0 keeps its 310 row
+        new CellSwap(1,  20, Kind.Wall),  // band 1 keeps its 331 row
+        new CellSwap(2,  90, Kind.Wall),  // band 2 (spawn) keeps its authored 60 row
+        new CellSwap(3,  35, Kind.Gap),   // band 3 keeps its 327 row
+        new CellSwap(4,  50, Kind.Wall),  // band 4 loses both rows
+        new CellSwap(4, 208, Kind.Gap),
+    };
+
+    [MenuItem("Tools/Course/Roll Out — Thin Out Cells")]
+    public static void ThinOutCells()
+    {
+        var scene = EditorSceneManager.GetActiveScene();
+        if (scene.name != "RollOut")
+        {
+            Debug.LogWarning("[RollOutBuilder] Active scene is '" + scene.name + "', not RollOut — open RollOut first.");
+            return;
+        }
+        if (EditorApplication.isPlaying)
+        {
+            Debug.LogWarning("[RollOutBuilder] Exit Play mode first — scene edits made in Play are discarded on stop.");
+            return;
+        }
+        var root = GameObject.Find("RollOut_Field");
+        if (root == null) { Debug.LogWarning("[RollOutBuilder] no RollOut_Field in the scene"); return; }
+
+        // SAFETY: the band meshes were cut from ComputePlans(), so a gap rebuild is only trustworthy if the
+        // plan still describes the live scene. Verify every planned wall/cell/hammer is actually present
+        // before touching a single mesh; bail out loudly rather than cutting holes from a stale plan.
+        var plans = ComputePlans();
+        if (!VerifyPlanMatchesScene(root.transform, plans)) return;
+
+        int cellsRemoved = 0, wallsAdded = 0, gapsAdded = 0;
+        var slip = new PhysicsMaterial("RollOut_Slippery")
+        { dynamicFriction = 0f, staticFriction = 0f, frictionCombine = PhysicsMaterialCombine.Minimum };
+        Material obsMat = GetOrCreateMat("RollOut_Obstacle", OBSCOL, 0.25f);
+
+        // group the requested gap cuts per band so each band's mesh is rebuilt exactly once
+        var gapAnglesByBand = new Dictionary<int, List<float>>();
+
+        foreach (var sw in CELL_SWAPS)
+        {
+            Transform band = root.transform.Find("Band_" + sw.band);
+            if (band == null) { Debug.LogWarning("[RollOutBuilder] Band_" + sw.band + " missing — skipped"); continue; }
+
+            int removed = RemoveCellRow(band, sw.angle);
+            if (removed == 0)
+            {
+                Debug.Log("[RollOutBuilder] Band_" + sw.band + " angle " + sw.angle
+                          + ": no cell row (already converted?) — skipping");
+                continue;
+            }
+            cellsRemoved += removed;
+
+            if (sw.to == Kind.Wall)
+            {
+                BuildWall(band, sw.angle, obsMat, slip);
+                wallsAdded++;
+            }
+            else // Kind.Gap — collected, cut below
+            {
+                if (!gapAnglesByBand.ContainsKey(sw.band)) gapAnglesByBand[sw.band] = new List<float>();
+                gapAnglesByBand[sw.band].Add(sw.angle);
+                gapsAdded++;
+            }
+        }
+
+        // re-cut the mesh of every band that gained a gap: existing (verified) arcs + the new ones
+        float halfLen = SEG_LEN * 0.5f;
+        foreach (var kv in gapAnglesByBand)
+        {
+            int i = kv.Key;
+            Transform band = root.transform.Find("Band_" + i);
+            var arcs = GapArcsFor(i, plans);
+            foreach (float a in kv.Value)
+                arcs.Add(new Vector2(a - GAP_WIDTH_DEG * 0.5f, a + GAP_WIDTH_DEG * 0.5f));
+
+            Mesh mesh = BuildBandMesh(R, halfLen, SEG, arcs, WALL_THK);
+            SaveAsset(mesh, "Assets/Meshes/Course/RollDrumBand_" + i + ".mesh");
+            // re-point BOTH the visual and the collider at the re-cut mesh (children are untouched)
+            var mf = band.GetComponent<MeshFilter>(); if (mf != null) mf.sharedMesh = mesh;
+            var mc = band.GetComponent<MeshCollider>(); if (mc != null) mc.sharedMesh = mesh;
+        }
+
+        EditorSceneManager.MarkSceneDirty(scene);
+        EditorSceneManager.SaveScene(scene);
+        Debug.Log("[RollOutBuilder] Thin-out done: removed " + cellsRemoved + " cells, added " + wallsAdded
+                  + " walls + " + gapsAdded + " gaps (meshes re-cut on " + gapAnglesByBand.Count
+                  + " bands). Re-run 'Add Roll Out Arrows' next. Saved RollOut.unity.");
+    }
+
+    // Every planned Wall/Cells/Hammer must exist in the scene at its planned angle. Gaps aren't objects, so
+    // they can't be checked directly — but if the solid obstacles all line up, the plan that cut the current
+    // holes is still valid, which is what a mesh re-cut depends on.
+    static bool VerifyPlanMatchesScene(Transform root, List<Obs>[] plans)
+    {
+        var problems = new List<string>();
+        for (int i = 0; i < plans.Length; i++)
+        {
+            Transform band = root.Find("Band_" + i);
+            if (band == null) { problems.Add("Band_" + i + " missing"); continue; }
+            foreach (var o in plans[i])
+            {
+                int a = Mathf.RoundToInt(o.angle);
+                if (o.kind == Kind.Wall)
+                {
+                    if (band.Find("Wall_" + a) == null) problems.Add("Band_" + i + ": expected Wall_" + a);
+                }
+                else if (o.kind == Kind.Hammer)
+                {
+                    if (band.Find("Hammer_" + a) == null) problems.Add("Band_" + i + ": expected Hammer_" + a);
+                }
+                else if (o.kind == Kind.Cells)
+                {
+                    if (CountCellRow(band, a) == 0) problems.Add("Band_" + i + ": expected EnergyCell row at " + a);
+                }
+            }
+        }
+        if (problems.Count > 0)
+        {
+            Debug.LogError("[RollOutBuilder] ABORTED — the live scene no longer matches ComputePlans(), so the "
+                + "existing gap arcs can't be trusted for a mesh re-cut. Fix or re-derive before retrying:\n  "
+                + string.Join("\n  ", problems.ToArray()));
+            return false;
+        }
+        return true;
+    }
+
+    static int CountCellRow(Transform band, int angle)
+    {
+        int n = 0;
+        string prefix = "EnergyCell_" + angle + "_";
+        for (int c = 0; c < band.childCount; c++)
+            if (band.GetChild(c).name.StartsWith(prefix)) n++;
+        return n;
+    }
+
+    static int RemoveCellRow(Transform band, int angle)
+    {
+        int n = 0;
+        string prefix = "EnergyCell_" + angle + "_";
+        for (int c = band.childCount - 1; c >= 0; c--)
+        {
+            var ch = band.GetChild(c);
+            if (!ch.name.StartsWith(prefix)) continue;
+            Undo.DestroyObjectImmediate(ch.gameObject);
+            n++;
+        }
+        return n;
+    }
+
+    // The gap arcs currently cut into band `i`'s mesh, straight from the plan that cut them.
+    static List<Vector2> GapArcsFor(int band, List<Obs>[] plans)
+    {
+        var arcs = new List<Vector2>();
+        if (band < 0 || band >= plans.Length) return arcs;
+        foreach (var o in plans[band])
+            if (o.kind == Kind.Gap) arcs.Add(new Vector2(o.angle - GAP_WIDTH_DEG * 0.5f, o.angle + GAP_WIDTH_DEG * 0.5f));
+        // gaps this tool added are already baked into the mesh but not into PROFILES — fold them back in so
+        // a second run (or the arrow pass) sees the true hole set.
+        foreach (var sw in CELL_SWAPS)
+            if (sw.band == band && sw.to == Kind.Gap)
+                arcs.Add(new Vector2(sw.angle - GAP_WIDTH_DEG * 0.5f, sw.angle + GAP_WIDTH_DEG * 0.5f));
+        return arcs;
+    }
+
+    // BuildBandMesh only drops a sector when its MIDPOINT falls inside a gap arc, so a 7° arc becomes a
+    // 1- or 2-sector hole (5.6°–11.25°). These are the real hole spans — use them, not the nominal arc.
+    static List<Vector2> HoleSpans(List<Vector2> gapArcs)
+    {
+        var spans = new List<Vector2>();
+        for (int s = 0; s < SEG; s++)
+        {
+            float mid = (s + 0.5f) / SEG * 360f;
+            if (InGap(mid, gapArcs)) spans.Add(new Vector2((float)s / SEG * 360f, (float)(s + 1) / SEG * 360f));
+        }
+        return spans;
+    }
+
+    static bool InHole(float deg, List<Vector2> holes)
+    {
+        float d = Mathf.Repeat(deg, 360f);
+        for (int i = 0; i < holes.Count; i++)
+            if (d >= holes[i].x && d <= holes[i].y) return true;
+        return false;
+    }
+
+    static int BandIndexOf(Transform band)
+    {
+        int idx;
+        if (band.name.StartsWith("Band_") && int.TryParse(band.name.Substring(5), out idx)) return idx;
+        return -1;
+    }
+
     // ---- roll-direction arrows (additive; run on the EXISTING RollOut scene, does NOT regenerate it) ----
     // Small subtle white chevrons seated flat on each band's surface, pointing along that band's roll
     // direction (so players read which way the roller carries them). They are CHILDREN of the band so they
@@ -682,17 +898,24 @@ public static class RollOutBuilder
         // 10 angles around the drum, 3 chevrons across the width at each → direction reads continuously as the log turns.
         float[] angles = { 18f, 54f, 90f, 126f, 162f, 198f, 234f, 270f, 306f, 342f };
         float[] cols = { -4.2f, 0f, 4.2f };
-        int total = 0;
+        int total = 0, skipped = 0;
+        var plansForGaps = ComputePlans();
         foreach (var rd in drums)
         {
             Transform band = rd.transform;
             for (int c = band.childCount - 1; c >= 0; c--)
                 if (band.GetChild(c).name.StartsWith("RollArrow")) Object.DestroyImmediate(band.GetChild(c).gameObject);
 
+            // An arrow seated over a gap would float above a hole. Skip those: the holes are quantized to
+            // whole mesh sectors, so test against the ACTUAL hole spans, not the nominal gap arc.
+            int bandIdx = BandIndexOf(band);
+            var holes = (bandIdx >= 0) ? HoleSpans(GapArcsFor(bandIdx, plansForGaps)) : new List<Vector2>();
+
             float rad = rd.radius > 0f ? rd.radius : R;
             float sign = rd.spinSign >= 0f ? 1f : -1f;
             foreach (float a in angles)
             {
+                if (InHole(a, holes)) { skipped += cols.Length; continue; }
                 float th = a * Mathf.Deg2Rad;
                 Vector3 radial = new Vector3(0f, Mathf.Cos(th), Mathf.Sin(th));            // surface normal (out)
                 Vector3 tangent = sign * new Vector3(0f, -Mathf.Sin(th), Mathf.Cos(th));   // roll/drag direction
@@ -703,7 +926,7 @@ public static class RollOutBuilder
                     go.transform.SetParent(band, false);
                     go.transform.localPosition = new Vector3(ox, radial.y * (rad + 0.06f), radial.z * (rad + 0.06f));
                     go.transform.localRotation = rot;
-                    go.transform.localScale = new Vector3(1.05f, 1.35f, 1f); // small + subtle
+                    go.transform.localScale = new Vector3(1.25f, 2.0f, 1f); // X = width across band, Y = length along the roll
                     var mf = go.AddComponent<MeshFilter>(); mf.sharedMesh = quad;
                     var mr = go.AddComponent<MeshRenderer>(); mr.sharedMaterial = arrowMat;
                     mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
@@ -714,7 +937,8 @@ public static class RollOutBuilder
         }
         EditorSceneManager.MarkSceneDirty(scene);
         EditorSceneManager.SaveScene(scene);
-        Debug.Log("[RollOutBuilder] Added " + total + " roll-direction arrows across " + drums.Length + " bands. Saved RollOut.unity.");
+        Debug.Log("[RollOutBuilder] Added " + total + " roll-direction arrows across " + drums.Length + " bands ("
+                  + skipped + " skipped over gaps). Saved RollOut.unity.");
     }
 
     static Material GetOrCreateArrowMat()
